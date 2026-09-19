@@ -18,7 +18,7 @@ import { PublicWatermarkedPage } from './components/public/PublicWatermarkedPage
 import { PublicDeliveryPage } from './components/public/PublicDeliveryPage';
 import { PublicModelosPage } from './components/public/PublicModelosPage';
 import { LoginPage } from './components/LoginPage';
-import { getCategories, getModelPhotos, getClients, syncDataFromServer } from './utils/storage';
+import { getCategories, getModelPhotos, getClients, syncDataFromServer, getAgencyPackages } from './utils/storage';
 import { getAuthState, subscribeToAuth } from './utils/auth';
 import { Category, ModelPhoto, Client } from './types';
 
@@ -340,6 +340,8 @@ export default function App() {
           onClose={() => setIsBackupModalOpen(false)}
           clients={clients}
           modelPhotos={modelPhotos}
+          categories={categories}
+          packages={getAgencyPackages()}
           onDataRestored={() => {
             loadData();
             syncDataFromServer();

@@ -17,14 +17,19 @@ import {
   Eye,
   Check,
   Sparkles,
+  FolderTree,
+  Image as ImageIcon,
+  Package,
 } from 'lucide-react';
-import { Client, ModelPhoto } from '../../types';
+import { Client, ModelPhoto, Category, AgencyPackage } from '../../types';
 import {
   generateBackupData,
   downloadBackupJson,
   getBackupSettings,
   saveBackupSettings,
-  restoreClientsFromBackupJson,
+  restoreDataFromBackupJson,
+  inspectBackupJson,
+  RestoreInspectionResult,
   BackupSettings,
   BackupPayload,
 } from '../../utils/backup';
@@ -35,6 +40,8 @@ interface BackupManagementModalProps {
   onClose: () => void;
   clients: Client[];
   modelPhotos: ModelPhoto[];
+  categories?: Category[];
+  packages?: AgencyPackage[];
   onDataRestored?: () => void;
 }
 
@@ -43,6 +50,8 @@ export const BackupManagementModal: React.FC<BackupManagementModalProps> = ({
   onClose,
   clients,
   modelPhotos,
+  categories = [],
+  packages = [],
   onDataRestored,
 }) => {
   const { showToast } = useToast();
@@ -55,13 +64,7 @@ export const BackupManagementModal: React.FC<BackupManagementModalProps> = ({
   // Restore state
   const [restoreFileText, setRestoreFileText] = useState<string>('');
   const [restoreFileName, setRestoreFileName] = useState<string>('');
-  const [restoreSummary, setRestoreSummary] = useState<{
-    valid: boolean;
-    clientCount: number;
-    chosenCount: number;
-    exportDate?: string;
-    error?: string;
-  } | null>(null);
+  const [restoreSummary, setRestoreSummary] = useState<RestoreInspectionResult | null>(null);
   const [isRestoring, setIsRestoring] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
@@ -69,15 +72,19 @@ export const BackupManagementModal: React.FC<BackupManagementModalProps> = ({
     if (isOpen) {
       const currentSettings = getBackupSettings();
       setSettings(currentSettings);
-      const payload = generateBackupData(clients, modelPhotos);
+      const payload = generateBackupData(clients, modelPhotos, categories, packages);
       setBackupPayload(payload);
     }
-  }, [isOpen, clients, modelPhotos]);
+  }, [isOpen, clients, modelPhotos, categories, packages]);
 
   if (!isOpen) return null;
 
   // Metrics
   const totalClients = clients.length;
+  const totalCategories = categories.length;
+  const totalModelPhotos = modelPhotos.length;
+  const totalPackages = packages.length;
+
   const totalChosenPhotos = clients.reduce(
     (acc, c) => acc + (c.chosenPhotoIds?.length || 0),
     0
@@ -89,9 +96,10 @@ export const BackupManagementModal: React.FC<BackupManagementModalProps> = ({
   const handleDownload = () => {
     setIsDownloading(true);
     try {
-      const result = downloadBackupJson();
+      const payload = generateBackupData(clients, modelPhotos, categories, packages);
+      const result = downloadBackupJson(payload);
       if (result.success) {
-        showToast(`Backup salvo com sucesso: ${result.fileName}`, 'success');
+        showToast(`Backup completo salvo com sucesso: ${result.fileName}`, 'success');
         setSettings(getBackupSettings());
       } else {
         showToast('Não foi possível gerar o arquivo de backup.', 'error');
@@ -103,7 +111,7 @@ export const BackupManagementModal: React.FC<BackupManagementModalProps> = ({
 
   const handleCopyJson = () => {
     try {
-      const payload = backupPayload || generateBackupData(clients, modelPhotos);
+      const payload = backupPayload || generateBackupData(clients, modelPhotos, categories, packages);
       navigator.clipboard.writeText(JSON.stringify(payload, null, 2));
       setCopied(true);
       showToast('JSON completo do backup copiado!', 'success');
@@ -145,54 +153,10 @@ export const BackupManagementModal: React.FC<BackupManagementModalProps> = ({
     reader.onload = (event) => {
       const content = event.target?.result as string;
       setRestoreFileText(content);
-      inspectRestoreContent(content);
+      const inspection = inspectBackupJson(content);
+      setRestoreSummary(inspection);
     };
     reader.readAsText(file);
-  };
-
-  const inspectRestoreContent = (content: string) => {
-    try {
-      const parsed = JSON.parse(content);
-      let count = 0;
-      let chosen = 0;
-      const exportDate = parsed.metadata?.exportDate || parsed.exportDate;
-
-      if (Array.isArray(parsed.rawClients)) {
-        count = parsed.rawClients.length;
-        chosen = parsed.rawClients.reduce(
-          (acc: number, c: any) => acc + (c.chosenPhotoIds?.length || 0),
-          0
-        );
-      } else if (Array.isArray(parsed.clients)) {
-        count = parsed.clients.length;
-        chosen = parsed.clients.reduce(
-          (acc: number, c: any) => acc + (c.chosenPhotoCount || c.chosenPhotoIds?.length || 0),
-          0
-        );
-      } else {
-        setRestoreSummary({
-          valid: false,
-          clientCount: 0,
-          chosenCount: 0,
-          error: 'Estrutura do arquivo não reconhecida como backup de clientes.',
-        });
-        return;
-      }
-
-      setRestoreSummary({
-        valid: true,
-        clientCount: count,
-        chosenCount: chosen,
-        exportDate,
-      });
-    } catch {
-      setRestoreSummary({
-        valid: false,
-        clientCount: 0,
-        chosenCount: 0,
-        error: 'Arquivo inválido: o conteúdo não é um JSON válido.',
-      });
-    }
   };
 
   const handleConfirmRestore = () => {
@@ -200,7 +164,7 @@ export const BackupManagementModal: React.FC<BackupManagementModalProps> = ({
 
     setIsRestoring(true);
     try {
-      const res = restoreClientsFromBackupJson(restoreFileText);
+      const res = restoreDataFromBackupJson(restoreFileText);
       if (res.success) {
         showToast(res.message, 'success');
         if (onDataRestored) {
@@ -245,20 +209,20 @@ export const BackupManagementModal: React.FC<BackupManagementModalProps> = ({
             </div>
             <div>
               <h2 className="text-base sm:text-lg font-bold text-zinc-900 dark:text-zinc-100 flex items-center gap-2">
-                <span>Backup Preventivo & Exportação JSON</span>
+                <span>Backup Completo & Exportação JSON</span>
                 <span className="text-[10px] uppercase tracking-wider font-bold bg-emerald-100 dark:bg-emerald-950/80 text-emerald-800 dark:text-emerald-300 border border-emerald-300 dark:border-emerald-800 px-2 py-0.5 rounded-full">
-                  Automático
+                  Migração Total
                 </span>
               </h2>
               <p className="text-xs text-zinc-500 dark:text-zinc-400 mt-0.5">
-                Proteja os dados dos clientes e fotos selecionadas com cópias locais e em segundo plano.
+                Exporte ou migre clientes, categorias, catálogo de fotos modelo e pacotes de valores em um único arquivo.
               </p>
             </div>
           </div>
 
           <button
             onClick={onClose}
-            className="p-1.5 text-zinc-400 hover:text-zinc-600 dark:hover:text-zinc-200 rounded-lg hover:bg-zinc-100 dark:hover:bg-zinc-800 transition-colors"
+            className="p-1.5 text-zinc-400 hover:text-zinc-600 dark:hover:text-zinc-200 rounded-lg hover:bg-zinc-100 dark:hover:bg-zinc-800 transition-colors cursor-pointer"
           >
             <X className="w-5 h-5" />
           </button>
@@ -302,7 +266,7 @@ export const BackupManagementModal: React.FC<BackupManagementModalProps> = ({
             }`}
           >
             <Upload className="w-3.5 h-3.5" />
-            <span>Restaurar Backup</span>
+            <span>Restaurar / Migrar</span>
           </button>
         </div>
 
@@ -311,8 +275,8 @@ export const BackupManagementModal: React.FC<BackupManagementModalProps> = ({
           {/* TAB 1: EXPORT & DOWNLOAD */}
           {activeTab === 'export' && (
             <div className="space-y-5">
-              {/* Quick Status Cards */}
-              <div className="grid grid-cols-3 gap-2.5 sm:gap-3">
+              {/* Quick Status Cards - 4 items in grid */}
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5 sm:gap-3">
                 <div className="p-3 rounded-xl bg-zinc-50 dark:bg-zinc-800/60 border border-zinc-200 dark:border-zinc-700/80">
                   <div className="flex items-center gap-1.5 text-zinc-500 dark:text-zinc-400 text-xs">
                     <Users className="w-3.5 h-3.5 text-amber-500" />
@@ -326,31 +290,51 @@ export const BackupManagementModal: React.FC<BackupManagementModalProps> = ({
 
                 <div className="p-3 rounded-xl bg-zinc-50 dark:bg-zinc-800/60 border border-zinc-200 dark:border-zinc-700/80">
                   <div className="flex items-center gap-1.5 text-zinc-500 dark:text-zinc-400 text-xs">
-                    <HeartHandshake className="w-3.5 h-3.5 text-emerald-500" />
-                    <span>Fotos Escolhidas</span>
+                    <FolderTree className="w-3.5 h-3.5 text-indigo-500" />
+                    <span>Categorias</span>
                   </div>
-                  <p className="text-lg font-bold text-emerald-600 dark:text-emerald-400 mt-1">
-                    {totalChosenPhotos}
+                  <p className="text-lg font-bold text-indigo-600 dark:text-indigo-400 mt-1">
+                    {totalCategories}
                   </p>
-                  <p className="text-[10px] text-zinc-500 mt-0.5">
-                    Em {clientsWithSelections} cliente(s)
-                  </p>
+                  <p className="text-[10px] text-zinc-500 mt-0.5">Com capas e descrições</p>
                 </div>
 
                 <div className="p-3 rounded-xl bg-zinc-50 dark:bg-zinc-800/60 border border-zinc-200 dark:border-zinc-700/80">
                   <div className="flex items-center gap-1.5 text-zinc-500 dark:text-zinc-400 text-xs">
-                    <Clock className="w-3.5 h-3.5 text-sky-500" />
-                    <span>Último Backup</span>
+                    <ImageIcon className="w-3.5 h-3.5 text-sky-500" />
+                    <span>Fotos Catálogo</span>
                   </div>
-                  <p className="text-xs font-semibold text-zinc-800 dark:text-zinc-200 mt-1 truncate">
-                    {settings.lastBackupTimestamp
-                      ? formatTimestamp(settings.lastBackupTimestamp)
-                      : 'Pendente'}
+                  <p className="text-lg font-bold text-sky-600 dark:text-sky-400 mt-1">
+                    {totalModelPhotos}
                   </p>
-                  <p className="text-[10px] text-emerald-600 dark:text-emerald-400 mt-0.5 font-medium flex items-center gap-1">
-                    <CheckCircle2 className="w-2.5 h-2.5" />
-                    <span>Dados preservados</span>
+                  <p className="text-[10px] text-zinc-500 mt-0.5">Modelos e prompts</p>
+                </div>
+
+                <div className="p-3 rounded-xl bg-zinc-50 dark:bg-zinc-800/60 border border-zinc-200 dark:border-zinc-700/80">
+                  <div className="flex items-center gap-1.5 text-zinc-500 dark:text-zinc-400 text-xs">
+                    <Package className="w-3.5 h-3.5 text-emerald-500" />
+                    <span>Pacotes</span>
+                  </div>
+                  <p className="text-lg font-bold text-emerald-600 dark:text-emerald-400 mt-1">
+                    {totalPackages}
                   </p>
+                  <p className="text-[10px] text-zinc-500 mt-0.5">Preços e benefícios</p>
+                </div>
+              </div>
+
+              {/* Informational Sub-Metric Bar */}
+              <div className="grid grid-cols-2 gap-2.5 p-3 rounded-xl bg-zinc-50 dark:bg-zinc-800/40 border border-zinc-200 dark:border-zinc-700/70 text-xs">
+                <div className="flex items-center gap-2">
+                  <HeartHandshake className="w-4 h-4 text-emerald-500" />
+                  <span className="text-zinc-600 dark:text-zinc-400">
+                    Fotos Escolhidas pelos Clientes: <strong className="text-zinc-900 dark:text-zinc-100">{totalChosenPhotos}</strong> (em {clientsWithSelections} cliente(s))
+                  </span>
+                </div>
+                <div className="flex items-center gap-2 justify-end">
+                  <Clock className="w-4 h-4 text-sky-500" />
+                  <span className="text-zinc-600 dark:text-zinc-400">
+                    Último Backup: <strong className="text-zinc-900 dark:text-zinc-100">{formatTimestamp(settings.lastBackupTimestamp)}</strong>
+                  </span>
                 </div>
               </div>
 
@@ -359,10 +343,10 @@ export const BackupManagementModal: React.FC<BackupManagementModalProps> = ({
                 <div className="space-y-1">
                   <h3 className="text-sm font-bold text-zinc-900 dark:text-zinc-100 flex items-center gap-2">
                     <HardDrive className="w-4 h-4 text-amber-600 dark:text-amber-400" />
-                    <span>Download Local do Arquivo JSON</span>
+                    <span>Download Local do Arquivo JSON de Backup</span>
                   </h3>
                   <p className="text-xs text-zinc-600 dark:text-zinc-400 max-w-md">
-                    Gera um arquivo <code className="px-1 py-0.5 rounded bg-zinc-200 dark:bg-zinc-800 font-mono text-[11px]">.json</code> completo contendo todos os clientes, contatos de WhatsApp, status, links de seleção e fotos marcadas com seus respectivos prompts.
+                    Gera um arquivo <code className="px-1 py-0.5 rounded bg-zinc-200 dark:bg-zinc-800 font-mono text-[11px]">.json</code> completo contendo todos os clientes, categorias cadastradas, catálogo de fotos modelo com seus respectivos prompts e pacotes da agência.
                   </p>
                 </div>
 
@@ -373,7 +357,7 @@ export const BackupManagementModal: React.FC<BackupManagementModalProps> = ({
                   className="flex items-center justify-center gap-2 px-4 py-2.5 bg-amber-600 hover:bg-amber-700 active:bg-amber-800 text-white text-xs font-semibold rounded-xl shadow-sm transition-all cursor-pointer shrink-0 disabled:opacity-50"
                 >
                   <Download className="w-4 h-4" />
-                  <span>Baixar Backup JSON</span>
+                  <span>Baixar Backup Completo JSON</span>
                 </button>
               </div>
 
@@ -433,7 +417,7 @@ export const BackupManagementModal: React.FC<BackupManagementModalProps> = ({
               <div className="p-3 rounded-xl bg-blue-50 dark:bg-blue-950/40 border border-blue-200 dark:border-blue-900/50 text-blue-800 dark:text-blue-300 text-[11px] flex items-start gap-2.5">
                 <Sparkles className="w-4 h-4 text-blue-500 shrink-0 mt-0.5" />
                 <div>
-                  <span className="font-semibold">Recomendação preventiva:</span> Baixe uma cópia local semanalmente ou antes de realizar alterações em massa nos seus ensaios fotográficos.
+                  <span className="font-semibold">Migração entre contas:</span> Este arquivo exporta toda a base de dados (clientes, categorias, galeria de modelos e pacotes), permitindo migrar tudo de uma instalação para outra facilmente.
                 </div>
               </div>
             </div>
@@ -444,7 +428,7 @@ export const BackupManagementModal: React.FC<BackupManagementModalProps> = ({
             <div className="space-y-3">
               <div className="flex items-center justify-between">
                 <p className="text-xs text-zinc-500 dark:text-zinc-400">
-                  Estrutura gerada em tempo real com os dados de {totalClients} cliente(s):
+                  Estrutura gerada em tempo real com {totalClients} cliente(s), {totalCategories} categoria(s), {totalModelPhotos} foto(s) modelo e {totalPackages} pacote(s):
                 </p>
                 <button
                   type="button"
@@ -470,7 +454,7 @@ export const BackupManagementModal: React.FC<BackupManagementModalProps> = ({
               <div className="p-3.5 rounded-xl bg-amber-50 dark:bg-amber-950/40 border border-amber-200 dark:border-amber-900/50 text-amber-800 dark:text-amber-300 text-xs flex items-start gap-2.5">
                 <AlertTriangle className="w-4 h-4 text-amber-600 dark:text-amber-400 shrink-0 mt-0.5" />
                 <div>
-                  <span className="font-semibold">Atenção ao Restaurar:</span> A importação de um backup JSON substituirá a lista atual de clientes e suas seleções pelas informações salvas no arquivo selecionado.
+                  <span className="font-semibold">Aviso de Restauração:</span> A restauração vai substituir os clientes, categorias, catálogo de fotos modelo e pacotes de valores atuais pelos dados presentes no arquivo de backup selecionado.
                 </div>
               </div>
 
@@ -491,7 +475,7 @@ export const BackupManagementModal: React.FC<BackupManagementModalProps> = ({
                   {restoreFileName ? restoreFileName : 'Clique para selecionar o arquivo de backup .JSON'}
                 </p>
                 <p className="text-[11px] text-zinc-500 dark:text-zinc-400 mt-1">
-                  Arquivos exportados anteriormente pelo StudioPhoto
+                  Compatível com backups completos e backups anteriores do sistema
                 </p>
               </div>
 
@@ -505,25 +489,50 @@ export const BackupManagementModal: React.FC<BackupManagementModalProps> = ({
                   }`}
                 >
                   {restoreSummary.valid ? (
-                    <div className="space-y-1.5">
+                    <div className="space-y-2">
                       <p className="font-semibold flex items-center gap-1.5">
                         <CheckCircle2 className="w-4 h-4 text-emerald-500" />
-                        <span>Arquivo de backup válido e pronto para recuperação!</span>
+                        <span>Arquivo de backup analisado com sucesso! Itens encontrados:</span>
                       </p>
-                      <div className="grid grid-cols-2 gap-2 text-[11px] pt-1 text-zinc-700 dark:text-zinc-300">
-                        <div>
-                          <strong>Clientes no arquivo:</strong> {restoreSummary.clientCount}
+                      
+                      {/* Grid displaying counts of all items found in the file */}
+                      <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 pt-1">
+                        <div className="p-2 rounded-lg bg-white/70 dark:bg-zinc-800/70 border border-emerald-200 dark:border-emerald-800/60">
+                          <span className="text-[10px] text-zinc-500 dark:text-zinc-400 block">Clientes:</span>
+                          <strong className="text-sm text-zinc-900 dark:text-zinc-100">{restoreSummary.clientCount}</strong>
+                          <span className="text-[10px] text-zinc-500 block">({restoreSummary.chosenCount} fotos esc.)</span>
                         </div>
-                        <div>
-                          <strong>Fotos selecionadas:</strong> {restoreSummary.chosenCount}
+
+                        <div className="p-2 rounded-lg bg-white/70 dark:bg-zinc-800/70 border border-emerald-200 dark:border-emerald-800/60">
+                          <span className="text-[10px] text-zinc-500 dark:text-zinc-400 block">Categorias:</span>
+                          <strong className="text-sm text-zinc-900 dark:text-zinc-100">{restoreSummary.categoryCount}</strong>
+                          <span className="text-[10px] text-zinc-500 block">
+                            {restoreSummary.hasCategories ? 'inclusas no arquivo' : 'não presentes (mantém atuais)'}
+                          </span>
                         </div>
-                        {restoreSummary.exportDate && (
-                          <div className="col-span-2 text-zinc-500">
-                            <strong>Data da exportação:</strong>{' '}
-                            {formatTimestamp(restoreSummary.exportDate)}
-                          </div>
-                        )}
+
+                        <div className="p-2 rounded-lg bg-white/70 dark:bg-zinc-800/70 border border-emerald-200 dark:border-emerald-800/60">
+                          <span className="text-[10px] text-zinc-500 dark:text-zinc-400 block">Fotos do Catálogo:</span>
+                          <strong className="text-sm text-zinc-900 dark:text-zinc-100">{restoreSummary.modelPhotoCount}</strong>
+                          <span className="text-[10px] text-zinc-500 block">
+                            {restoreSummary.hasModelPhotos ? 'inclusas no arquivo' : 'não presentes (mantém atuais)'}
+                          </span>
+                        </div>
+
+                        <div className="p-2 rounded-lg bg-white/70 dark:bg-zinc-800/70 border border-emerald-200 dark:border-emerald-800/60">
+                          <span className="text-[10px] text-zinc-500 dark:text-zinc-400 block">Pacotes da Agência:</span>
+                          <strong className="text-sm text-zinc-900 dark:text-zinc-100">{restoreSummary.packageCount}</strong>
+                          <span className="text-[10px] text-zinc-500 block">
+                            {restoreSummary.hasPackages ? 'inclusos no arquivo' : 'não presentes (mantém atuais)'}
+                          </span>
+                        </div>
                       </div>
+
+                      {restoreSummary.exportDate && (
+                        <p className="text-[11px] text-zinc-500 dark:text-zinc-400 pt-1">
+                          <strong>Data da exportação original:</strong> {formatTimestamp(restoreSummary.exportDate)}
+                        </p>
+                      )}
                     </div>
                   ) : (
                     <p className="flex items-center gap-1.5">
@@ -542,7 +551,12 @@ export const BackupManagementModal: React.FC<BackupManagementModalProps> = ({
                   className="w-full flex items-center justify-center gap-2 py-2.5 bg-emerald-600 hover:bg-emerald-700 active:bg-emerald-800 text-white font-semibold text-xs rounded-xl shadow-sm transition-all cursor-pointer disabled:opacity-50"
                 >
                   <RefreshCw className={`w-4 h-4 ${isRestoring ? 'animate-spin' : ''}`} />
-                  <span>Restaurar {restoreSummary.clientCount} Cliente(s) Agora</span>
+                  <span>
+                    Restaurar Dados ({restoreSummary.clientCount} Clientes
+                    {restoreSummary.hasCategories ? `, ${restoreSummary.categoryCount} Categorias` : ''}
+                    {restoreSummary.hasModelPhotos ? `, ${restoreSummary.modelPhotoCount} Fotos Catálogo` : ''}
+                    {restoreSummary.hasPackages ? `, ${restoreSummary.packageCount} Pacotes` : ''})
+                  </span>
                 </button>
               )}
             </div>
@@ -589,3 +603,4 @@ export const BackupManagementModal: React.FC<BackupManagementModalProps> = ({
     </div>
   );
 };
+

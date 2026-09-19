@@ -365,14 +365,19 @@ app.get('/api/backup/export', (req, res) => {
     metadata: {
       exportDate: now,
       system: 'StudioPhoto Gestão & Ensaios IA',
-      version: '1.0.0',
+      version: '2.0.0',
       type: 'preventive_backup',
       totalClients: (memoryStore.clients || []).length,
+      totalCategories: (memoryStore.categories || []).length,
       totalModelPhotos: (memoryStore.modelPhotos || []).length,
+      totalPackages: (memoryStore.packages || []).length,
       environment: 'server',
     },
     clients: enrichedClients,
-    rawClients: memoryStore.clients,
+    rawClients: memoryStore.clients || [],
+    categories: memoryStore.categories || [],
+    modelPhotos: memoryStore.modelPhotos || [],
+    packages: memoryStore.packages || [],
   };
 
   res.setHeader('Content-Type', 'application/json');

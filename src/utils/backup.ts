@@ -1,5 +1,14 @@
-import { Client, ModelPhoto } from '../types';
-import { getClients, getModelPhotos, saveClients } from './storage';
+import { Client, ModelPhoto, Category, AgencyPackage } from '../types';
+import {
+  getClients,
+  getModelPhotos,
+  saveClients,
+  getCategories,
+  saveCategories,
+  saveModelPhotos,
+  getAgencyPackages,
+  saveAgencyPackages,
+} from './storage';
 
 export interface ClientBackupItem {
   id: string;
@@ -53,6 +62,9 @@ export interface BackupPayload {
     version: string;
     type: 'preventive_backup';
     totalClients: number;
+    totalCategories?: number;
+    totalModelPhotos?: number;
+    totalPackages?: number;
     totalChosenPhotos: number;
     totalFinalPhotos: number;
     environment: string;
@@ -65,6 +77,9 @@ export interface BackupPayload {
   };
   clients: ClientBackupItem[];
   rawClients: Client[];
+  categories?: Category[];
+  modelPhotos?: ModelPhoto[];
+  packages?: AgencyPackage[];
 }
 
 export interface BackupSettings {
@@ -124,13 +139,17 @@ export const saveBackupSettings = (settings: Partial<BackupSettings>): BackupSet
   return updated;
 };
 
-// Generate complete structured backup data
+// Generate complete structured backup data including clients, categories, model photos gallery, and packages
 export const generateBackupData = (
   customClients?: Client[],
-  customModelPhotos?: ModelPhoto[]
+  customModelPhotos?: ModelPhoto[],
+  customCategories?: Category[],
+  customPackages?: AgencyPackage[]
 ): BackupPayload => {
   const clientsList = customClients || getClients();
   const photosList = customModelPhotos || getModelPhotos();
+  const categoriesList = customCategories || getCategories();
+  const packagesList = customPackages || getAgencyPackages();
 
   const baseUrl = typeof window !== 'undefined'
     ? `${window.location.origin}${window.location.pathname.replace(/\/$/, '')}`
@@ -220,9 +239,12 @@ export const generateBackupData = (
     metadata: {
       exportDate: now,
       system: 'StudioPhoto Gestão & Ensaios IA',
-      version: '1.0.0',
+      version: '2.0.0',
       type: 'preventive_backup',
       totalClients: clientsList.length,
+      totalCategories: categoriesList.length,
+      totalModelPhotos: photosList.length,
+      totalPackages: packagesList.length,
       totalChosenPhotos,
       totalFinalPhotos,
       environment: typeof window !== 'undefined' ? window.location.hostname : 'production',
@@ -235,6 +257,9 @@ export const generateBackupData = (
     },
     clients: enrichedClients,
     rawClients: clientsList,
+    categories: categoriesList,
+    modelPhotos: photosList,
+    packages: packagesList,
   };
 };
 
@@ -247,7 +272,7 @@ export const downloadBackupJson = (
     const payload = customPayload || generateBackupData();
     const jsonString = JSON.stringify(payload, null, 2);
 
-    // Format filename with readable date: backup_studiophoto_clientes_selecoes_2026-09-02_13h05.json
+    // Format filename with readable date: backup_studiophoto_completo_2026-09-02_13h05.json
     const now = new Date();
     const pad = (n: number) => n.toString().padStart(2, '0');
     const dateStr = `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}`;
@@ -255,7 +280,7 @@ export const downloadBackupJson = (
     
     const fileName =
       customFileName ||
-      `backup_studiophoto_clientes_e_fotos_${dateStr}_${timeStr}.json`;
+      `backup_studiophoto_completo_${dateStr}_${timeStr}.json`;
 
     const blob = new Blob([jsonString], { type: 'application/json;charset=utf-8;' });
     const url = URL.createObjectURL(blob);
@@ -333,10 +358,109 @@ export const triggerAutoBackup = async (
   }
 };
 
-// Validate and restore data from a backup JSON file
-export const restoreClientsFromBackupJson = (
+export interface RestoreInspectionResult {
+  valid: boolean;
+  clientCount: number;
+  categoryCount: number;
+  modelPhotoCount: number;
+  packageCount: number;
+  chosenCount: number;
+  exportDate?: string;
+  hasCategories: boolean;
+  hasModelPhotos: boolean;
+  hasPackages: boolean;
+  error?: string;
+}
+
+// Inspect backup content before restoring
+export const inspectBackupJson = (jsonContent: string): RestoreInspectionResult => {
+  try {
+    const parsed = JSON.parse(jsonContent);
+    let clientCount = 0;
+    let chosenCount = 0;
+    const exportDate = parsed.metadata?.exportDate || parsed.exportDate;
+
+    if (Array.isArray(parsed.rawClients)) {
+      clientCount = parsed.rawClients.length;
+      chosenCount = parsed.rawClients.reduce(
+        (acc: number, c: any) => acc + (c.chosenPhotoIds?.length || 0),
+        0
+      );
+    } else if (Array.isArray(parsed.clients)) {
+      clientCount = parsed.clients.length;
+      chosenCount = parsed.clients.reduce(
+        (acc: number, c: any) => acc + (c.chosenPhotoCount || c.chosenPhotoIds?.length || 0),
+        0
+      );
+    } else {
+      return {
+        valid: false,
+        clientCount: 0,
+        categoryCount: 0,
+        modelPhotoCount: 0,
+        packageCount: 0,
+        chosenCount: 0,
+        hasCategories: false,
+        hasModelPhotos: false,
+        hasPackages: false,
+        error: 'Estrutura do arquivo não reconhecida como backup válido (lista de clientes não encontrada).',
+      };
+    }
+
+    const hasCategories = Array.isArray(parsed.categories);
+    const categoryCount = hasCategories ? parsed.categories.length : 0;
+
+    const hasModelPhotos = Array.isArray(parsed.modelPhotos);
+    const modelPhotoCount = hasModelPhotos ? parsed.modelPhotos.length : 0;
+
+    const hasPackages = Array.isArray(parsed.packages);
+    const packageCount = hasPackages ? parsed.packages.length : 0;
+
+    return {
+      valid: true,
+      clientCount,
+      categoryCount,
+      modelPhotoCount,
+      packageCount,
+      chosenCount,
+      exportDate,
+      hasCategories,
+      hasModelPhotos,
+      hasPackages,
+    };
+  } catch (err: any) {
+    return {
+      valid: false,
+      clientCount: 0,
+      categoryCount: 0,
+      modelPhotoCount: 0,
+      packageCount: 0,
+      chosenCount: 0,
+      hasCategories: false,
+      hasModelPhotos: false,
+      hasPackages: false,
+      error: `Arquivo inválido: o conteúdo não é um JSON válido (${err.message || 'Erro de análise'}).`,
+    };
+  }
+};
+
+export interface RestoreExecutionResult {
+  success: boolean;
+  message: string;
+  restoredClientsCount: number;
+  restoredCategoriesCount?: number;
+  restoredModelPhotosCount?: number;
+  restoredPackagesCount?: number;
+  clients?: Client[];
+  categories?: Category[];
+  modelPhotos?: ModelPhoto[];
+  packages?: AgencyPackage[];
+}
+
+// Validate and restore data (clients, and optionally categories, model photos, and packages) from a backup JSON file
+export const restoreDataFromBackupJson = (
   jsonContent: string
-): { success: boolean; message: string; restoredCount: number; clients?: Client[] } => {
+): RestoreExecutionResult => {
   try {
     const parsed = JSON.parse(jsonContent);
 
@@ -356,6 +480,9 @@ export const restoreClientsFromBackupJson = (
         modelPhotoIds: c.modelPhotoIds || c.chosenPhotoIds || [],
         chosenPhotoIds: c.chosenPhotoIds || [],
         watermarkedPhotos: c.watermarkedPhotos || [],
+        watermarkText: c.watermarkText,
+        proofStatus: c.proofStatus,
+        proofSubmittedAt: c.proofSubmittedAt,
         finalPhotos: c.finalPhotos || [],
         status: c.status || 'Aguardando seleção',
         token: c.token,
@@ -370,12 +497,38 @@ export const restoreClientsFromBackupJson = (
       return {
         success: false,
         message: 'O arquivo JSON fornecido não contém uma lista válida de clientes ou seleções.',
-        restoredCount: 0,
+        restoredClientsCount: 0,
       };
     }
 
-    // Merge or replace: save clients
+    // 1. Restore clients
     saveClients(incomingClients);
+
+    const parts: string[] = [`${incomingClients.length} cliente(s)`];
+    let restoredCategoriesCount: number | undefined;
+    let restoredModelPhotosCount: number | undefined;
+    let restoredPackagesCount: number | undefined;
+
+    // 2. Restore categories if present (backward-compatible)
+    if (Array.isArray(parsed.categories)) {
+      saveCategories(parsed.categories);
+      restoredCategoriesCount = parsed.categories.length;
+      parts.push(`${parsed.categories.length} categoria(s)`);
+    }
+
+    // 3. Restore model photos gallery if present (backward-compatible)
+    if (Array.isArray(parsed.modelPhotos)) {
+      saveModelPhotos(parsed.modelPhotos);
+      restoredModelPhotosCount = parsed.modelPhotos.length;
+      parts.push(`${parsed.modelPhotos.length} foto(s) modelo`);
+    }
+
+    // 4. Restore packages if present (backward-compatible)
+    if (Array.isArray(parsed.packages)) {
+      saveAgencyPackages(parsed.packages);
+      restoredPackagesCount = parsed.packages.length;
+      parts.push(`${parsed.packages.length} pacote(s)`);
+    }
 
     saveBackupSettings({
       lastBackupTimestamp: new Date().toISOString(),
@@ -383,15 +536,25 @@ export const restoreClientsFromBackupJson = (
 
     return {
       success: true,
-      message: `${incomingClients.length} cliente(s) e suas seleções foram restaurados com sucesso!`,
-      restoredCount: incomingClients.length,
+      message: `Backup restaurado com sucesso! (${parts.join(', ')})`,
+      restoredClientsCount: incomingClients.length,
+      restoredCategoriesCount,
+      restoredModelPhotosCount,
+      restoredPackagesCount,
       clients: incomingClients,
+      categories: parsed.categories,
+      modelPhotos: parsed.modelPhotos,
+      packages: parsed.packages,
     };
   } catch (err: any) {
     return {
       success: false,
       message: `Erro ao analisar o arquivo JSON: ${err.message || 'Arquivo corrompido ou formato inválido'}`,
-      restoredCount: 0,
+      restoredClientsCount: 0,
     };
   }
 };
+
+// Backward-compatible alias
+export const restoreClientsFromBackupJson = restoreDataFromBackupJson;
+

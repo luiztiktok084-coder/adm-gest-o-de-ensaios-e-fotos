@@ -89,7 +89,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
               type="button"
               onClick={onOpenBackupModal}
               className="flex items-center gap-2 px-3.5 py-2 text-xs font-semibold text-zinc-800 dark:text-zinc-200 bg-white dark:bg-zinc-900 hover:bg-zinc-50 dark:hover:bg-zinc-800 border border-zinc-200 dark:border-zinc-700 rounded-xl transition-all shadow-2xs cursor-pointer"
-              title="Backup Preventivo & Exportação JSON (Clientes e Fotos Selecionadas)"
+              title="Backup Completo & Exportação JSON (Clientes, Categorias, Fotos Modelo e Pacotes)"
             >
               <ShieldCheck className="w-4 h-4 text-emerald-500" />
               <span>Backup JSON</span>

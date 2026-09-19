@@ -31,7 +31,6 @@ import {
 } from 'lucide-react';
 import { Client, ClientStatus, Category, ModelPhoto } from '../../types';
 import { saveClients, deleteClient, generateUniqueToken, syncDataFromServer } from '../../utils/storage';
-import { downloadSingleImage } from '../../utils/zip';
 import { useToast } from '../Toast';
 import { NavView } from '../Sidebar';
 import { ConfirmModal } from '../ConfirmModal';
@@ -118,6 +117,126 @@ export const ClientsView: React.FC<ClientsViewProps> = ({
   // Details Modal for viewing reference photo & submission data
   const [clientToViewDetails, setClientToViewDetails] = useState<Client | null>(null);
   const [lightboxImage, setLightboxImage] = useState<string | null>(null);
+  const [isDownloadingRef, setIsDownloadingRef] = useState(false);
+
+  // Função dedicada e resiliente para download da foto de referência
+  const handleDownloadReferencePhoto = async (imageUrl: string, clientName: string) => {
+    if (!imageUrl) {
+      showToast('Nenhuma imagem de referência disponível para download.', 'error');
+      return;
+    }
+
+    setIsDownloadingRef(true);
+    const safeName = `referencia_${(clientName || 'cliente').toLowerCase().replace(/[^a-z0-9_-]/g, '_')}.jpg`;
+
+    try {
+      // 1. Caso Base64 (Data URI) - decodificação síncrona em Blob sem depender de conexões assíncronas
+      if (imageUrl.startsWith('data:')) {
+        const commaIdx = imageUrl.indexOf(',');
+        const mimeMatch = imageUrl.match(/data:([^;]+)/);
+        const mimeType = mimeMatch ? mimeMatch[1] : 'image/jpeg';
+        const base64Data = (commaIdx >= 0 ? imageUrl.slice(commaIdx + 1) : imageUrl).replace(/\s/g, '');
+        const binaryStr = atob(base64Data);
+        const len = binaryStr.length;
+        const bytes = new Uint8Array(len);
+        for (let i = 0; i < len; i++) {
+          bytes[i] = binaryStr.charCodeAt(i);
+        }
+        const blob = new Blob([bytes], { type: mimeType });
+        const blobUrl = URL.createObjectURL(blob);
+
+        const a = document.createElement('a');
+        a.href = blobUrl;
+        a.download = safeName;
+        a.style.display = 'none';
+        document.body.appendChild(a);
+        a.click();
+
+        setTimeout(() => {
+          if (a.parentNode) document.body.removeChild(a);
+          URL.revokeObjectURL(blobUrl);
+        }, 30000);
+
+        showToast('Download da foto de referência concluído!', 'success');
+        return;
+      }
+
+      // 2. Caso URL normal / Blob - Tenta fetch direto
+      let blob: Blob | null = null;
+      try {
+        const response = await fetch(imageUrl, { mode: 'cors' });
+        if (response.ok) {
+          blob = await response.blob();
+        }
+      } catch (e) {
+        console.warn('Fetch direto falhou, tentando fallback via canvas:', e);
+      }
+
+      // 3. Fallback via Canvas para contornar bloqueios de CORS / iframe
+      if (!blob) {
+        blob = await new Promise<Blob | null>((resolve) => {
+          const img = new Image();
+          img.crossOrigin = 'anonymous';
+          img.onload = () => {
+            try {
+              const canvas = document.createElement('canvas');
+              canvas.width = img.naturalWidth || img.width || 800;
+              canvas.height = img.naturalHeight || img.height || 1066;
+              const ctx = canvas.getContext('2d');
+              if (!ctx) return resolve(null);
+              ctx.drawImage(img, 0, 0);
+              canvas.toBlob((b) => resolve(b), 'image/jpeg', 0.96);
+            } catch {
+              resolve(null);
+            }
+          };
+          img.onerror = () => resolve(null);
+          img.src = imageUrl;
+        });
+      }
+
+      if (blob) {
+        const blobUrl = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = blobUrl;
+        a.download = safeName;
+        a.style.display = 'none';
+        document.body.appendChild(a);
+        a.click();
+
+        setTimeout(() => {
+          if (a.parentNode) document.body.removeChild(a);
+          URL.revokeObjectURL(blobUrl);
+        }, 30000);
+
+        showToast('Download da foto de referência concluído!', 'success');
+        return;
+      }
+
+      // 4. Fallback direto disparando o link
+      const a = document.createElement('a');
+      a.href = imageUrl;
+      a.download = safeName;
+      a.target = '_blank';
+      a.rel = 'noopener noreferrer';
+      a.style.display = 'none';
+      document.body.appendChild(a);
+      a.click();
+
+      setTimeout(() => {
+        if (a.parentNode) document.body.removeChild(a);
+      }, 5000);
+
+      showToast('Download da foto de referência iniciado!', 'success');
+    } catch (err) {
+      console.error('Erro ao baixar foto de referência:', err);
+      // Fallback amigável: amplia a imagem na tela para permitir salvar com botão direito
+      setLightboxImage(imageUrl);
+      showToast('Imagem de referência aberta na tela. Você pode salvá-la clicando com o botão direito.', 'info');
+    } finally {
+      setIsDownloadingRef(false);
+    }
+  };
 
   // Delete modal state
   const [clientToDelete, setClientToDelete] = useState<{ id: string; name: string } | null>(null);
@@ -1270,22 +1389,23 @@ export const ClientsView: React.FC<ClientsViewProps> = ({
                       <p className="text-[11px] text-zinc-500 dark:text-zinc-400 leading-relaxed">
                         Use esta imagem de referência no seu gerador de imagem (Nano Banana, Midjourney, Stable Diffusion ou Face Swap) para manter a fidelidade e traços do cliente nos modelos fotográficos escolhidos.
                       </p>
-                      <div className="flex items-center gap-2 pt-1">
+                      <div className="flex flex-wrap items-center gap-2 pt-1">
                         <button
                           type="button"
-                          onClick={async () => {
-                            if (!clientToViewDetails.referencePhotoUrl) return;
-                            const ok = await downloadSingleImage(
-                              clientToViewDetails.referencePhotoUrl,
-                              `referencia_${clientToViewDetails.name.toLowerCase().replace(/\s+/g, '_')}.jpg`
-                            );
-                            if (ok) showToast('Download da foto de referência iniciado!', 'success');
-                            else showToast('Erro ao baixar foto de referência.', 'error');
-                          }}
-                          className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-bold text-white bg-purple-600 hover:bg-purple-700 rounded-xl transition-all shadow-xs cursor-pointer"
+                          disabled={isDownloadingRef}
+                          onClick={() => handleDownloadReferencePhoto(clientToViewDetails.referencePhotoUrl || '', clientToViewDetails.name)}
+                          className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-bold text-white bg-purple-600 hover:bg-purple-700 disabled:opacity-60 rounded-xl transition-all shadow-xs cursor-pointer"
                         >
-                          <Download className="w-3.5 h-3.5" />
-                          <span>Baixar Imagem de Referência</span>
+                          <Download className={`w-3.5 h-3.5 ${isDownloadingRef ? 'animate-bounce' : ''}`} />
+                          <span>{isDownloadingRef ? 'Baixando...' : 'Baixar Imagem de Referência'}</span>
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setLightboxImage(clientToViewDetails.referencePhotoUrl || null)}
+                          className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-purple-700 dark:text-purple-300 bg-purple-100 hover:bg-purple-200 dark:bg-purple-900/40 dark:hover:bg-purple-900/60 rounded-xl transition-all cursor-pointer"
+                        >
+                          <Eye className="w-3.5 h-3.5" />
+                          <span>Ampliar Imagem</span>
                         </button>
                       </div>
                     </div>
@@ -1448,19 +1568,37 @@ export const ClientsView: React.FC<ClientsViewProps> = ({
           onClick={() => setLightboxImage(null)}
           className="fixed inset-0 z-60 bg-black/90 backdrop-blur-md flex items-center justify-center p-4 cursor-zoom-out animate-in fade-in"
         >
-          <div className="relative max-w-4xl max-h-[90vh] w-full flex flex-col items-center">
+          <div
+            onClick={(e) => e.stopPropagation()}
+            className="relative max-w-4xl max-h-[90vh] w-full flex flex-col items-center cursor-default"
+          >
             <img
               src={lightboxImage}
               alt="Ampliada"
-              className="max-w-full max-h-[85vh] object-contain rounded-2xl shadow-2xl border border-white/10"
+              className="max-w-full max-h-[80vh] object-contain rounded-2xl shadow-2xl border border-white/10 bg-zinc-950"
               referrerPolicy="no-referrer"
             />
-            <button
-              onClick={() => setLightboxImage(null)}
-              className="mt-3 px-4 py-1.5 rounded-full bg-white/20 text-white text-xs font-semibold hover:bg-white/30 backdrop-blur-xs transition-colors"
-            >
-              Fechar Visualização
-            </button>
+            <div className="mt-3 flex flex-wrap items-center justify-center gap-2">
+              <button
+                type="button"
+                disabled={isDownloadingRef}
+                onClick={() => {
+                  const clientName = clientToViewDetails?.name || 'cliente';
+                  handleDownloadReferencePhoto(lightboxImage, clientName);
+                }}
+                className="flex items-center gap-1.5 px-4 py-2 rounded-xl bg-purple-600 hover:bg-purple-500 disabled:opacity-60 text-white text-xs font-bold shadow-lg transition-colors cursor-pointer"
+              >
+                <Download className={`w-3.5 h-3.5 ${isDownloadingRef ? 'animate-bounce' : ''}`} />
+                <span>{isDownloadingRef ? 'Baixando...' : 'Baixar Imagem'}</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => setLightboxImage(null)}
+                className="px-4 py-2 rounded-xl bg-white/20 text-white text-xs font-semibold hover:bg-white/30 backdrop-blur-xs transition-colors cursor-pointer"
+              >
+                Fechar Visualização
+              </button>
+            </div>
           </div>
         </div>
       )}

@@ -31,6 +31,7 @@ import {
 } from 'lucide-react';
 import { Client, ClientStatus, Category, ModelPhoto } from '../../types';
 import { saveClients, deleteClient, generateUniqueToken, syncDataFromServer } from '../../utils/storage';
+import { downloadSingleImage } from '../../utils/zip';
 import { useToast } from '../Toast';
 import { NavView } from '../Sidebar';
 import { ConfirmModal } from '../ConfirmModal';
@@ -1270,16 +1271,22 @@ export const ClientsView: React.FC<ClientsViewProps> = ({
                         Use esta imagem de referência no seu gerador de imagem (Nano Banana, Midjourney, Stable Diffusion ou Face Swap) para manter a fidelidade e traços do cliente nos modelos fotográficos escolhidos.
                       </p>
                       <div className="flex items-center gap-2 pt-1">
-                        <a
-                          href={clientToViewDetails.referencePhotoUrl}
-                          download={`referencia_${clientToViewDetails.name.toLowerCase().replace(/\s+/g, '_')}.jpg`}
-                          target="_blank"
-                          rel="noreferrer"
-                          className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-bold text-white bg-purple-600 hover:bg-purple-700 rounded-xl transition-all shadow-xs"
+                        <button
+                          type="button"
+                          onClick={async () => {
+                            if (!clientToViewDetails.referencePhotoUrl) return;
+                            const ok = await downloadSingleImage(
+                              clientToViewDetails.referencePhotoUrl,
+                              `referencia_${clientToViewDetails.name.toLowerCase().replace(/\s+/g, '_')}.jpg`
+                            );
+                            if (ok) showToast('Download da foto de referência iniciado!', 'success');
+                            else showToast('Erro ao baixar foto de referência.', 'error');
+                          }}
+                          className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-bold text-white bg-purple-600 hover:bg-purple-700 rounded-xl transition-all shadow-xs cursor-pointer"
                         >
                           <Download className="w-3.5 h-3.5" />
                           <span>Baixar Imagem de Referência</span>
-                        </a>
+                        </button>
                       </div>
                     </div>
                   </div>

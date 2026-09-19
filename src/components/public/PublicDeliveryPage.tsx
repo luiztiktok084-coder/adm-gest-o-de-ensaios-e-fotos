@@ -12,7 +12,7 @@ import {
 } from 'lucide-react';
 import { Client, FinalPhoto } from '../../types';
 import { fetchPublicDeliveryData } from '../../utils/storage';
-import { downloadImagesAsZip } from '../../utils/zip';
+import { downloadImagesAsZip, downloadSingleImage } from '../../utils/zip';
 
 interface PublicDeliveryPageProps {
   token: string;
@@ -24,6 +24,15 @@ export const PublicDeliveryPage: React.FC<PublicDeliveryPageProps> = ({ token })
   const [isZipping, setIsZipping] = useState(false);
   const [zipProgress, setZipProgress] = useState('');
   const [previewPhoto, setPreviewPhoto] = useState<FinalPhoto | null>(null);
+  const [downloadingPhotoId, setDownloadingPhotoId] = useState<string | null>(null);
+  const [toastMessage, setToastMessage] = useState<{ text: string; type: 'info' | 'success' | 'error' } | null>(null);
+
+  const showNotification = (text: string, type: 'info' | 'success' | 'error' = 'info') => {
+    setToastMessage({ text, type });
+    setTimeout(() => {
+      setToastMessage((prev) => (prev?.text === text ? null : prev));
+    }, 4500);
+  };
 
   useEffect(() => {
     let isMounted = true;
@@ -77,7 +86,7 @@ export const PublicDeliveryPage: React.FC<PublicDeliveryPageProps> = ({ token })
 
   const handleDownloadAllZip = async () => {
     if (finalPhotos.length === 0) {
-      alert('Nenhuma foto final disponível para download.');
+      showNotification('Nenhuma foto final disponível para download.', 'error');
       return;
     }
 
@@ -89,23 +98,36 @@ export const PublicDeliveryPage: React.FC<PublicDeliveryPageProps> = ({ token })
       }));
 
       const zipFilename = `Ensaio_${client.name.replace(/\s+/g, '_')}_Final.zip`;
-      await downloadImagesAsZip(items, zipFilename, (text) => setZipProgress(text));
+      const success = await downloadImagesAsZip(items, zipFilename, (text) => setZipProgress(text));
+      if (success) {
+        showNotification('Download do arquivo ZIP iniciado com sucesso!', 'success');
+      } else {
+        showNotification('Ocorreu um erro ao compactar as fotos.', 'error');
+      }
     } catch (err) {
-      alert('Ocorreu um erro ao gerar o arquivo ZIP.');
+      console.error('Erro ao gerar arquivo ZIP:', err);
+      showNotification('Ocorreu um erro ao gerar o arquivo ZIP.', 'error');
     } finally {
       setIsZipping(false);
       setZipProgress('');
     }
   };
 
-  const handleDownloadSingleImage = (imageUrl: string, filename: string) => {
-    const link = document.createElement('a');
-    link.href = imageUrl;
-    link.download = filename;
-    link.target = '_blank';
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
+  const handleDownloadSingleImageClick = async (photoId: string, imageUrl: string, filename: string) => {
+    try {
+      setDownloadingPhotoId(photoId);
+      const success = await downloadSingleImage(imageUrl, filename);
+      if (success) {
+        showNotification(`Download de "${filename}" iniciado!`, 'success');
+      } else {
+        showNotification(`Não foi possível baixar "${filename}".`, 'error');
+      }
+    } catch (err) {
+      console.error('Erro ao baixar foto:', err);
+      showNotification('Erro ao baixar foto.', 'error');
+    } finally {
+      setDownloadingPhotoId(null);
+    }
   };
 
   return (
@@ -223,11 +245,13 @@ export const PublicDeliveryPage: React.FC<PublicDeliveryPageProps> = ({ token })
                     </p>
 
                     <button
-                      onClick={() => handleDownloadSingleImage(photo.imageUrl, photo.name || `Foto_${idx + 1}.jpg`)}
-                      className="flex items-center justify-center gap-1 sm:gap-1.5 px-2.5 sm:px-3 py-1.5 text-[11px] sm:text-xs font-semibold text-zinc-950 bg-amber-500 hover:bg-amber-400 rounded-xl transition-colors shadow-2xs shrink-0 cursor-pointer"
+                      type="button"
+                      onClick={() => handleDownloadSingleImageClick(photo.id, photo.imageUrl, photo.name || `Foto_${idx + 1}.jpg`)}
+                      disabled={downloadingPhotoId === photo.id}
+                      className="flex items-center justify-center gap-1 sm:gap-1.5 px-2.5 sm:px-3 py-1.5 text-[11px] sm:text-xs font-semibold text-zinc-950 bg-amber-500 hover:bg-amber-400 disabled:opacity-60 rounded-xl transition-colors shadow-2xs shrink-0 cursor-pointer"
                     >
-                      <Download className="w-3.5 h-3.5" />
-                      <span>Baixar</span>
+                      <Download className={`w-3.5 h-3.5 ${downloadingPhotoId === photo.id ? 'animate-bounce' : ''}`} />
+                      <span>{downloadingPhotoId === photo.id ? 'Baixando...' : 'Baixar'}</span>
                     </button>
                   </div>
                 </div>
@@ -235,6 +259,30 @@ export const PublicDeliveryPage: React.FC<PublicDeliveryPageProps> = ({ token })
             </div>
           )}
         </div>
+
+        {/* Floating Notification Toast */}
+        {toastMessage && (
+          <div className="fixed bottom-6 right-6 z-50 animate-in fade-in slide-in-from-bottom-5 duration-200">
+            <div
+              className={`flex items-center gap-3 px-4 py-3 rounded-2xl shadow-2xl text-xs font-semibold border ${
+                toastMessage.type === 'success'
+                  ? 'bg-emerald-950/95 border-emerald-500/50 text-emerald-200'
+                  : toastMessage.type === 'error'
+                  ? 'bg-rose-950/95 border-rose-500/50 text-rose-200'
+                  : 'bg-zinc-900/95 border-amber-500/50 text-zinc-200'
+              }`}
+            >
+              {toastMessage.type === 'success' ? (
+                <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0" />
+              ) : toastMessage.type === 'error' ? (
+                <AlertCircle className="w-4 h-4 text-rose-400 shrink-0" />
+              ) : (
+                <Sparkles className="w-4 h-4 text-amber-400 shrink-0" />
+              )}
+              <span>{toastMessage.text}</span>
+            </div>
+          </div>
+        )}
 
         {/* Lightbox Preview Modal */}
         {previewPhoto && (
@@ -278,11 +326,12 @@ export const PublicDeliveryPage: React.FC<PublicDeliveryPageProps> = ({ token })
                 </p>
                 <button
                   type="button"
-                  onClick={() => handleDownloadSingleImage(previewPhoto.imageUrl, previewPhoto.name || 'Foto_Final.jpg')}
-                  className="flex items-center justify-center gap-2 px-5 py-2.5 rounded-xl font-bold text-xs sm:text-sm text-zinc-950 bg-amber-500 hover:bg-amber-400 shadow-md transition-all cursor-pointer w-full sm:w-auto"
+                  onClick={() => handleDownloadSingleImageClick(previewPhoto.id, previewPhoto.imageUrl, previewPhoto.name || 'Foto_Final.jpg')}
+                  disabled={downloadingPhotoId === previewPhoto.id}
+                  className="flex items-center justify-center gap-2 px-5 py-2.5 rounded-xl font-bold text-xs sm:text-sm text-zinc-950 bg-amber-500 hover:bg-amber-400 disabled:opacity-60 shadow-md transition-all cursor-pointer w-full sm:w-auto"
                 >
-                  <Download className="w-4 h-4" />
-                  <span>Baixar Esta Foto Agora</span>
+                  <Download className={`w-4 h-4 ${downloadingPhotoId === previewPhoto.id ? 'animate-bounce' : ''}`} />
+                  <span>{downloadingPhotoId === previewPhoto.id ? 'Baixando Foto...' : 'Baixar Esta Foto Agora'}</span>
                 </button>
               </div>
             </div>

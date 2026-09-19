@@ -18,7 +18,7 @@ import {
 import { Client, FinalPhoto } from '../../types';
 import { saveClients, generateUniqueToken, uploadImageToBlob } from '../../utils/storage';
 import { compressImageFile } from '../../utils/imageCompressor';
-import { downloadImagesAsZip } from '../../utils/zip';
+import { downloadImagesAsZip, downloadSingleImage } from '../../utils/zip';
 import { useToast } from '../Toast';
 import { ConfirmModal } from '../ConfirmModal';
 
@@ -162,8 +162,12 @@ export const FinalDeliveryView: React.FC<FinalDeliveryViewProps> = ({ clients })
       }));
 
       const zipFilename = `Ensaio_${client.name.replace(/\s+/g, '_')}_Final.zip`;
-      await downloadImagesAsZip(items, zipFilename, (text) => setZipProgress(text));
-      showToast(`Download de ${zipFilename} concluído com sucesso!`, 'success');
+      const success = await downloadImagesAsZip(items, zipFilename, (text) => setZipProgress(text));
+      if (success) {
+        showToast(`Download de ${zipFilename} concluído com sucesso!`, 'success');
+      } else {
+        showToast('Não foi possível gerar o arquivo ZIP.', 'error');
+      }
     } catch (err) {
       showToast('Erro ao criar arquivo ZIP.', 'error');
     } finally {
@@ -386,7 +390,19 @@ export const FinalDeliveryView: React.FC<FinalDeliveryViewProps> = ({ clients })
                         loading="lazy"
                       />
                       <div className="absolute inset-0 bg-gradient-to-t from-black/85 via-transparent to-transparent opacity-0 group-hover:opacity-100 transition-opacity flex flex-col justify-between p-3">
-                        <div className="flex justify-end">
+                        <div className="flex justify-end gap-1.5">
+                          <button
+                            type="button"
+                            onClick={async () => {
+                              const ok = await downloadSingleImage(photo.imageUrl, photo.name || 'foto_final.jpg');
+                              if (ok) showToast(`Download de ${photo.name} iniciado!`, 'success');
+                              else showToast(`Erro ao baixar ${photo.name}.`, 'error');
+                            }}
+                            className="p-1.5 bg-zinc-900/80 hover:bg-amber-500 hover:text-zinc-950 text-white rounded-lg cursor-pointer shadow-md transition-colors"
+                            title="Baixar imagem individual"
+                          >
+                            <Download className="w-4 h-4" />
+                          </button>
                           <button
                             type="button"
                             onClick={() => setPhotoToRemove({ id: photo.id, name: photo.name })}

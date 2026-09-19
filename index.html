@@ -1,0 +1,58 @@
+<!doctype html>
+<html lang="pt-BR">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Remix Gestão de Ensaios Fotográficos</title>
+    <meta name="description" content="Aplicativo web para gestão e venda de ensaios fotográficos com seleção pública de fotos e entrega final." />
+    <meta property="og:title" content="Remix Gestão de Ensaios Fotográficos" />
+    <meta property="og:description" content="Aplicativo web para gestão e venda de ensaios fotográficos com seleção pública de fotos e entrega final." />
+    <meta property="og:type" content="website" />
+    <script>
+      (function() {
+        try {
+          var _origFetch = typeof window !== 'undefined' ? window.fetch : undefined;
+          var _fn = typeof _origFetch === 'function' ? _origFetch.bind(window) : _origFetch;
+          
+          if (typeof Window !== 'undefined' && Window.prototype) {
+            try {
+              Object.defineProperty(Window.prototype, 'fetch', {
+                get: function() { return _fn; },
+                set: function(v) { _fn = v; },
+                configurable: true,
+                enumerable: true
+              });
+            } catch (e) {}
+          }
+
+          if (typeof window !== 'undefined') {
+            try {
+              Object.defineProperty(window, 'fetch', {
+                get: function() { return _fn; },
+                set: function(v) { _fn = v; },
+                configurable: true,
+                enumerable: true
+              });
+            } catch (e) {}
+          }
+
+          if (typeof globalThis !== 'undefined' && globalThis !== window) {
+            try {
+              Object.defineProperty(globalThis, 'fetch', {
+                get: function() { return _fn; },
+                set: function(v) { _fn = v; },
+                configurable: true,
+                enumerable: true
+              });
+            } catch (e) {}
+          }
+        } catch (e) {}
+      })();
+    </script>
+  </head>
+  <body class="bg-zinc-100 dark:bg-zinc-950">
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>
+

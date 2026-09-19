@@ -1,0 +1,8 @@
+{
+  "name": "Remix Gestão de Ensaios Fotográficos",
+  "description": "Aplicativo web para gestão e venda de ensaios fotográficos com seleção pública de fotos e entrega final.",
+  "requestFramePermissions": [],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}

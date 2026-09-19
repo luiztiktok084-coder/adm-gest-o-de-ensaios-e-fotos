@@ -89,20 +89,10 @@ export const loginUser = async (
       };
     }
   } catch {
-    // Local fallback in case server route is unavailable
-    if (
-      cleanEmail === 'alunodosenai3@gmail.com' &&
-      cleanPassword === 'Tudodebom2026@#'
-    ) {
-      const fallbackUser: AuthUser = {
-        email: 'alunodosenai3@gmail.com',
-        name: 'Administrador do Estúdio',
-        role: 'Fotógrafo / Diretor Criativo',
-        lastLogin: new Date().toISOString(),
-      };
-      saveUserSession(fallbackUser, rememberMe);
-      return { success: true, user: fallbackUser };
-    }
+    return {
+      success: false,
+      error: 'Não foi possível conectar ao servidor de autenticação. Verifique sua conexão e tente novamente.',
+    };
   }
 
   return {

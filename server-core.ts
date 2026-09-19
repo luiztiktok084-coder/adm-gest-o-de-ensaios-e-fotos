@@ -797,13 +797,20 @@ app.get('/api/health', (req, res) => {
 // Admin Authentication endpoint with fallback
 app.post('/api/auth/login', (req, res) => {
   const { email, password } = req.body;
-  const masterEmail = (process.env.ADMIN_EMAIL || 'alunodosenai3@gmail.com').trim().toLowerCase();
-  const masterPassword = (process.env.ADMIN_PASSWORD || 'Tudodebom2026@#').trim();
+  const masterEmail = process.env.ADMIN_EMAIL;
+  const masterPassword = process.env.ADMIN_PASSWORD;
+
+  if (!masterEmail || !masterPassword) {
+    return res.status(500).json({
+      success: false,
+      error: 'Login não configurado no servidor (defina ADMIN_EMAIL e ADMIN_PASSWORD nas variáveis de ambiente).',
+    });
+  }
 
   const cleanEmail = (email || '').trim().toLowerCase();
   const cleanPassword = (password || '').trim();
 
-  if (cleanEmail === masterEmail && cleanPassword === masterPassword) {
+  if (cleanEmail === masterEmail.trim().toLowerCase() && cleanPassword === masterPassword.trim()) {
     return res.json({
       success: true,
       user: {

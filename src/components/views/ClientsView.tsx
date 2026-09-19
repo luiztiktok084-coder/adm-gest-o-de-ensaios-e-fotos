@@ -19,6 +19,7 @@ import {
   Link2,
   Eye,
   Download,
+  FileSpreadsheet,
   Image as ImageIcon,
   Layers,
   Star,
@@ -30,7 +31,7 @@ import {
   ShieldCheck,
 } from 'lucide-react';
 import { Client, ClientStatus, Category, ModelPhoto } from '../../types';
-import { saveClients, deleteClient, generateUniqueToken, syncDataFromServer } from '../../utils/storage';
+import { saveClients, deleteClient, generateUniqueToken, syncDataFromServer, getAgencyPackages } from '../../utils/storage';
 import { useToast } from '../Toast';
 import { NavView } from '../Sidebar';
 import { ConfirmModal } from '../ConfirmModal';
@@ -322,9 +323,135 @@ export const ClientsView: React.FC<ClientsViewProps> = ({
   };
 
   const handleStatusChange = (client: Client, newStatus: ClientStatus) => {
-    const updated = clients.map((c) => (c.id === client.id ? { ...c, status: newStatus } : c));
+    const updated = clients.map((c) => {
+      if (c.id === client.id) {
+        return {
+          ...c,
+          status: newStatus,
+          deliveredAt: newStatus === 'Entregue' && !c.deliveredAt ? new Date().toISOString() : c.deliveredAt,
+        };
+      }
+      return c;
+    });
     saveClients(updated);
     showToast(`Status de ${client.name} atualizado para "${newStatus}".`, 'success');
+  };
+
+  /**
+   * Exporta a lista completa de clientes, datas dos ensaios e status de entrega em formato CSV
+   * estruturado para controle financeiro e gerencial do fotógrafo.
+   */
+  const handleExportCSV = () => {
+    if (!clients || clients.length === 0) {
+      showToast('Nenhum cliente cadastrado para exportação.', 'info');
+      return;
+    }
+
+    try {
+      const agencyPackages = getAgencyPackages();
+
+      const escapeCsv = (val: unknown): string => {
+        if (val === null || val === undefined) return '""';
+        const str = String(val).replace(/"/g, '""');
+        return `"${str}"`;
+      };
+
+      const formatIsoDateTime = (isoStr?: string): string => {
+        if (!isoStr) return '';
+        try {
+          const d = new Date(isoStr);
+          if (isNaN(d.getTime())) return '';
+          return `${d.toLocaleDateString('pt-BR')} ${d.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })}`;
+        } catch {
+          return '';
+        }
+      };
+
+      const headers = [
+        'Nome do Cliente',
+        'WhatsApp / Telefone',
+        'E-mail',
+        'Ensaio Contratado',
+        'Categoria',
+        'Pacote / Preço Estimado',
+        'Status Atual',
+        'Status de Entrega',
+        'Data do Ensaio / Cadastro',
+        'Data da Seleção de Fotos',
+        'Data de Envio da Prova',
+        'Data de Entrega Final',
+        'Aprovação da Prova (Marca d\'Água)',
+        'Qtd. Fotos Selecionadas',
+        'Qtd. Fotos Entregues',
+        'Origem do Cadastro',
+        'Observações do Cliente',
+        'Link de Seleção',
+      ];
+
+      const rows = clients.map((client) => {
+        const categoryName = categories.find((c) => c.id === client.categoryId)?.name || 'Geral';
+
+        // Busca correspondência com pacotes de preços cadastrados para apoiar o financeiro
+        const matchingPkg = agencyPackages.find(
+          (p) => p.name.trim().toLowerCase() === (client.contractedSession || '').trim().toLowerCase()
+        );
+        const valorPacote = matchingPkg ? matchingPkg.price : '';
+
+        const statusEntrega = client.status === 'Entregue' ? 'Entregue' : 'Pendente';
+        const dataCadastro = formatIsoDateTime(client.createdAt);
+        const dataSelecao = formatIsoDateTime(client.selectionSubmittedAt);
+        const dataProva = formatIsoDateTime(client.proofSubmittedAt);
+        const dataEntrega = client.deliveredAt
+          ? formatIsoDateTime(client.deliveredAt)
+          : (client.status === 'Entregue' ? 'Concluído' : '');
+
+        const statusAprovacao = client.proofStatus || 'Não solicitada';
+        const qtdSelecionadas = client.chosenPhotoIds?.length || 0;
+        const qtdEntregues = client.finalPhotos?.length || 0;
+        const origem = client.source === 'public_models_showcase' ? 'Mostruário Público' : 'Painel Fotógrafo';
+        const observacoes = client.selectionNotes || '';
+        const linkSelecao = getSelectionUrl(client.token);
+
+        return [
+          escapeCsv(client.name),
+          escapeCsv(client.whatsapp),
+          escapeCsv(client.email || ''),
+          escapeCsv(client.contractedSession),
+          escapeCsv(categoryName),
+          escapeCsv(valorPacote),
+          escapeCsv(client.status),
+          escapeCsv(statusEntrega),
+          escapeCsv(dataCadastro),
+          escapeCsv(dataSelecao),
+          escapeCsv(dataProva),
+          escapeCsv(dataEntrega),
+          escapeCsv(statusAprovacao),
+          escapeCsv(qtdSelecionadas),
+          escapeCsv(qtdEntregues),
+          escapeCsv(origem),
+          escapeCsv(observacoes),
+          escapeCsv(linkSelecao),
+        ].join(';');
+      });
+
+      // Prefixo UTF-8 BOM (\uFEFF) para garantir abertura com acentuação e formatação corretas no Excel e Sheets
+      const csvContent = '\uFEFF' + [headers.map(escapeCsv).join(';'), ...rows].join('\r\n');
+      const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+      const url = URL.createObjectURL(blob);
+      const downloadLink = document.createElement('a');
+      const dateStr = new Date().toISOString().slice(0, 10);
+      downloadLink.setAttribute('href', url);
+      downloadLink.setAttribute('download', `relatorio_clientes_ensaios_${dateStr}.csv`);
+      document.body.appendChild(downloadLink);
+      downloadLink.click();
+      document.body.removeChild(downloadLink);
+      URL.revokeObjectURL(url);
+
+      showToast(`Planilha CSV com ${clients.length} cliente(s) exportada com sucesso!`, 'success');
+    } catch (err) {
+      console.error('Erro ao exportar CSV:', err);
+      showToast('Ocorreu um erro ao exportar a planilha CSV.', 'error');
+    }
   };
 
   const confirmDeleteClient = () => {
@@ -443,6 +570,7 @@ export const ClientsView: React.FC<ClientsViewProps> = ({
       categoryId: editCategoryId,
       modelPhotoIds: editModelPhotoIds,
       status: editStatus,
+      deliveredAt: editStatus === 'Entregue' && !editingClient.deliveredAt ? new Date().toISOString() : editingClient.deliveredAt,
       token: editToken.trim() || editingClient.token,
     };
 
@@ -518,6 +646,18 @@ export const ClientsView: React.FC<ClientsViewProps> = ({
         </div>
 
         <div className="flex items-center gap-2 flex-wrap">
+          <button
+            id="btn-export-clients-csv"
+            type="button"
+            onClick={handleExportCSV}
+            className="flex items-center gap-2 px-4 py-2 text-xs sm:text-sm font-bold text-white bg-emerald-600 hover:bg-emerald-700 active:bg-emerald-800 rounded-xl transition-all shadow-xs cursor-pointer"
+            title="Baixar planilha CSV completa de clientes, ensaios e status para organização financeira"
+          >
+            <Download className="w-4 h-4" />
+            <FileSpreadsheet className="w-4 h-4" />
+            <span>Baixar Planilha (CSV)</span>
+          </button>
+
           {onOpenBackupModal && (
             <button
               type="button"
@@ -575,6 +715,17 @@ export const ClientsView: React.FC<ClientsViewProps> = ({
                 </option>
               ))}
             </select>
+
+            <button
+              id="btn-filter-download-csv"
+              type="button"
+              onClick={handleExportCSV}
+              className="flex items-center gap-1.5 px-3 py-2 text-xs font-bold text-emerald-700 dark:text-emerald-300 bg-emerald-50 dark:bg-emerald-950/50 hover:bg-emerald-100 dark:hover:bg-emerald-900/60 border border-emerald-300 dark:border-emerald-700 rounded-xl transition-all shadow-2xs cursor-pointer shrink-0 whitespace-nowrap"
+              title="Baixar planilha completa em formato CSV para organização financeira"
+            >
+              <Download className="w-3.5 h-3.5 text-emerald-600 dark:text-emerald-400" />
+              <span>Baixar Planilha</span>
+            </button>
           </div>
         </div>
 
@@ -646,6 +797,24 @@ export const ClientsView: React.FC<ClientsViewProps> = ({
             );
           })}
         </div>
+      </div>
+
+      {/* Summary Count & Action Bar */}
+      <div className="flex items-center justify-between gap-3 px-1 text-xs text-zinc-500 dark:text-zinc-400">
+        <div>
+          Exibindo <strong className="font-bold text-zinc-800 dark:text-zinc-200">{filteredClients.length}</strong> de <strong className="font-bold text-zinc-800 dark:text-zinc-200">{clients.length}</strong> cliente(s) cadastrado(s)
+        </div>
+        <button
+          id="btn-list-download-csv"
+          type="button"
+          onClick={handleExportCSV}
+          className="inline-flex items-center gap-1.5 text-xs font-bold text-emerald-600 dark:text-emerald-400 hover:text-emerald-700 dark:hover:text-emerald-300 hover:underline cursor-pointer"
+          title="Baixar planilha de clientes para controle financeiro"
+        >
+          <FileSpreadsheet className="w-3.5 h-3.5" />
+          <Download className="w-3 h-3" />
+          <span>Baixar Planilha (CSV)</span>
+        </button>
       </div>
 
       {/* Clients Table / List */}

@@ -8,6 +8,7 @@ import {
   saveModelPhotos,
   getAgencyPackages,
   saveAgencyPackages,
+  saveAllRestoredData,
 } from './storage';
 
 export interface ClientBackupItem {
@@ -458,9 +459,9 @@ export interface RestoreExecutionResult {
 }
 
 // Validate and restore data (clients, and optionally categories, model photos, and packages) from a backup JSON file
-export const restoreDataFromBackupJson = (
+export const restoreDataFromBackupJson = async (
   jsonContent: string
-): RestoreExecutionResult => {
+): Promise<RestoreExecutionResult> => {
   try {
     const parsed = JSON.parse(jsonContent);
 
@@ -501,34 +502,37 @@ export const restoreDataFromBackupJson = (
       };
     }
 
-    // 1. Restore clients
-    saveClients(incomingClients);
-
     const parts: string[] = [`${incomingClients.length} cliente(s)`];
     let restoredCategoriesCount: number | undefined;
     let restoredModelPhotosCount: number | undefined;
     let restoredPackagesCount: number | undefined;
 
-    // 2. Restore categories if present (backward-compatible)
-    if (Array.isArray(parsed.categories)) {
-      saveCategories(parsed.categories);
-      restoredCategoriesCount = parsed.categories.length;
-      parts.push(`${parsed.categories.length} categoria(s)`);
+    const incomingCategories = Array.isArray(parsed.categories) ? parsed.categories : undefined;
+    const incomingModelPhotos = Array.isArray(parsed.modelPhotos) ? parsed.modelPhotos : undefined;
+    const incomingPackages = Array.isArray(parsed.packages) ? parsed.packages : undefined;
+
+    if (incomingCategories) {
+      restoredCategoriesCount = incomingCategories.length;
+      parts.push(`${incomingCategories.length} categoria(s)`);
     }
 
-    // 3. Restore model photos gallery if present (backward-compatible)
-    if (Array.isArray(parsed.modelPhotos)) {
-      saveModelPhotos(parsed.modelPhotos);
-      restoredModelPhotosCount = parsed.modelPhotos.length;
-      parts.push(`${parsed.modelPhotos.length} foto(s) modelo`);
+    if (incomingModelPhotos) {
+      restoredModelPhotosCount = incomingModelPhotos.length;
+      parts.push(`${incomingModelPhotos.length} foto(s) modelo`);
     }
 
-    // 4. Restore packages if present (backward-compatible)
-    if (Array.isArray(parsed.packages)) {
-      saveAgencyPackages(parsed.packages);
-      restoredPackagesCount = parsed.packages.length;
-      parts.push(`${parsed.packages.length} pacote(s)`);
+    if (incomingPackages) {
+      restoredPackagesCount = incomingPackages.length;
+      parts.push(`${incomingPackages.length} pacote(s)`);
     }
+
+    // Salva todas as entidades simultaneamente e aguarda a sincronização completa única com o servidor
+    await saveAllRestoredData({
+      clients: incomingClients,
+      categories: incomingCategories,
+      modelPhotos: incomingModelPhotos,
+      packages: incomingPackages,
+    });
 
     saveBackupSettings({
       lastBackupTimestamp: new Date().toISOString(),
@@ -542,9 +546,9 @@ export const restoreDataFromBackupJson = (
       restoredModelPhotosCount,
       restoredPackagesCount,
       clients: incomingClients,
-      categories: parsed.categories,
-      modelPhotos: parsed.modelPhotos,
-      packages: parsed.packages,
+      categories: incomingCategories,
+      modelPhotos: incomingModelPhotos,
+      packages: incomingPackages,
     };
   } catch (err: any) {
     return {

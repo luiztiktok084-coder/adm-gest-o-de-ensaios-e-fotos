@@ -113,7 +113,7 @@ const notifyStorageUpdate = () => {
 };
 
 // Async background sync with the server
-const pushFullSyncToServer = async () => {
+export const pushFullSyncToServer = async (): Promise<boolean> => {
   try {
     const payload = {
       categories: getCategories(),
@@ -123,14 +123,16 @@ const pushFullSyncToServer = async () => {
       packages: getAgencyPackages(),
     };
 
-    await fetch('/api/sync', {
+    const res = await fetch('/api/sync', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(payload),
     });
+    return res.ok;
   } catch (err) {
     // Network or offline fallback
     console.warn('Sync to server warning:', err);
+    return false;
   }
 };
 
@@ -161,11 +163,10 @@ export const syncDataFromServer = async (): Promise<boolean> => {
       localStorage.setItem(STORAGE_KEYS.CLIENTS, JSON.stringify(cleanClients));
     }
 
-    // 4. Packages (sync from server, filtering out unedited legacy mock packages)
+    // 4. Packages (sync from server)
     if (data.packages && Array.isArray(data.packages)) {
-      const cleanPackages = data.packages.filter((p: AgencyPackage) => !LEGACY_MOCK_PACKAGE_IDS.includes(p.id));
-      memoryPackages = cleanPackages;
-      localStorage.setItem(STORAGE_KEYS.PACKAGES, JSON.stringify(cleanPackages));
+      memoryPackages = data.packages;
+      localStorage.setItem(STORAGE_KEYS.PACKAGES, JSON.stringify(data.packages));
     }
 
     if (data.apiSettings && !memoryApiSettings?.geminiApiKey) {
@@ -192,9 +193,8 @@ export const getAgencyPackages = (): AgencyPackage[] => {
     }
     const parsed: AgencyPackage[] = JSON.parse(data);
     if (Array.isArray(parsed)) {
-      const clean = parsed.filter((p: AgencyPackage) => !LEGACY_MOCK_PACKAGE_IDS.includes(p.id));
-      memoryPackages = clean;
-      return clean;
+      memoryPackages = parsed;
+      return parsed;
     }
     memoryPackages = [];
     return [];
@@ -219,6 +219,65 @@ export const saveAgencyPackages = (packages: AgencyPackage[]): void => {
       body: JSON.stringify({ packages }),
     }).catch(() => {});
   } catch (_) {}
+};
+
+export interface UnifiedRestoreData {
+  clients?: Client[];
+  categories?: Category[];
+  modelPhotos?: ModelPhoto[];
+  packages?: AgencyPackage[];
+}
+
+/**
+ * Salva simultaneamente todas as entidades restauradas (clientes, categorias, fotos modelo e pacotes)
+ * na memória runtime e no localStorage de forma síncrona. Em seguida, realiza uma única requisição
+ * de sincronização completa com o servidor via /api/sync e aguarda (await) a resposta antes de retornar.
+ * Isto elimina qualquer condição de corrida (race condition) decorrente de requisições concorrentes.
+ */
+export const saveAllRestoredData = async (data: UnifiedRestoreData): Promise<boolean> => {
+  // 1. Gravação síncrona local de todos os tipos de dados fornecidos
+  if (Array.isArray(data.clients)) {
+    memoryClients = data.clients;
+    try {
+      localStorage.setItem(STORAGE_KEYS.CLIENTS, JSON.stringify(data.clients));
+    } catch (err) {
+      console.warn('Could not save clients to localStorage:', err);
+    }
+  }
+
+  if (Array.isArray(data.categories)) {
+    memoryCategories = data.categories;
+    try {
+      localStorage.setItem(STORAGE_KEYS.CATEGORIES, JSON.stringify(data.categories));
+    } catch (err) {
+      console.warn('Could not save categories to localStorage:', err);
+    }
+  }
+
+  if (Array.isArray(data.modelPhotos)) {
+    memoryModelPhotos = data.modelPhotos;
+    try {
+      localStorage.setItem(STORAGE_KEYS.MODEL_PHOTOS, JSON.stringify(data.modelPhotos));
+    } catch (err) {
+      console.warn('Could not save model photos to localStorage:', err);
+    }
+  }
+
+  if (Array.isArray(data.packages)) {
+    memoryPackages = data.packages;
+    try {
+      localStorage.setItem(STORAGE_KEYS.PACKAGES, JSON.stringify(data.packages));
+    } catch (err) {
+      console.warn('Could not save packages to localStorage:', err);
+    }
+  }
+
+  // Notifica componentes e abas de uma só vez
+  notifyStorageUpdate();
+
+  // 2. Dispara uma ÚNICA requisição de sincronização completa com o servidor e aguarda (await)
+  const syncSuccess = await pushFullSyncToServer();
+  return syncSuccess;
 };
 
 export const getCategories = (): Category[] => {

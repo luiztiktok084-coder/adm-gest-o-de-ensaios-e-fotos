@@ -42,7 +42,7 @@ interface BackupManagementModalProps {
   modelPhotos: ModelPhoto[];
   categories?: Category[];
   packages?: AgencyPackage[];
-  onDataRestored?: () => void;
+  onDataRestored?: () => void | Promise<void>;
 }
 
 export const BackupManagementModal: React.FC<BackupManagementModalProps> = ({
@@ -159,24 +159,27 @@ export const BackupManagementModal: React.FC<BackupManagementModalProps> = ({
     reader.readAsText(file);
   };
 
-  const handleConfirmRestore = () => {
-    if (!restoreFileText || !restoreSummary?.valid) return;
+  const handleConfirmRestore = async () => {
+    if (!restoreFileText || !restoreSummary?.valid || isRestoring) return;
 
     setIsRestoring(true);
     try {
-      const res = restoreDataFromBackupJson(restoreFileText);
+      const res = await restoreDataFromBackupJson(restoreFileText);
       if (res.success) {
-        showToast(res.message, 'success');
         if (onDataRestored) {
-          onDataRestored();
+          await onDataRestored();
         }
+        showToast(res.message, 'success');
         setRestoreFileText('');
         setRestoreFileName('');
         setRestoreSummary(null);
         setActiveTab('export');
+        setSettings(getBackupSettings());
       } else {
         showToast(res.message, 'error');
       }
+    } catch (err: any) {
+      showToast(`Erro ao restaurar backup: ${err?.message || 'Falha inesperada'}`, 'error');
     } finally {
       setIsRestoring(false);
     }
@@ -552,10 +555,13 @@ export const BackupManagementModal: React.FC<BackupManagementModalProps> = ({
                 >
                   <RefreshCw className={`w-4 h-4 ${isRestoring ? 'animate-spin' : ''}`} />
                   <span>
-                    Restaurar Dados ({restoreSummary.clientCount} Clientes
-                    {restoreSummary.hasCategories ? `, ${restoreSummary.categoryCount} Categorias` : ''}
-                    {restoreSummary.hasModelPhotos ? `, ${restoreSummary.modelPhotoCount} Fotos Catálogo` : ''}
-                    {restoreSummary.hasPackages ? `, ${restoreSummary.packageCount} Pacotes` : ''})
+                    {isRestoring
+                      ? 'Restaurando e sincronizando com o servidor...'
+                      : `Restaurar Dados (${restoreSummary.clientCount} Clientes${
+                          restoreSummary.hasCategories ? `, ${restoreSummary.categoryCount} Categorias` : ''
+                        }${restoreSummary.hasModelPhotos ? `, ${restoreSummary.modelPhotoCount} Fotos Catálogo` : ''}${
+                          restoreSummary.hasPackages ? `, ${restoreSummary.packageCount} Pacotes` : ''
+                        })`}
                   </span>
                 </button>
               )}

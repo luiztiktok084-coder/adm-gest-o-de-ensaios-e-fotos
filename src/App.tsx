@@ -342,9 +342,9 @@ export default function App() {
           modelPhotos={modelPhotos}
           categories={categories}
           packages={getAgencyPackages()}
-          onDataRestored={() => {
+          onDataRestored={async () => {
             loadData();
-            syncDataFromServer();
+            await syncDataFromServer();
           }}
         />
       </div>

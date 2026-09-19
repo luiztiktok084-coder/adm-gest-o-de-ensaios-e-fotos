@@ -218,6 +218,342 @@ const getGeminiClient = (overrideApiKey?: string) => {
 };
 
 // ----------------------------------------------------
+// RESEND AUTOMATIC EMAIL NOTIFICATIONS FOR PHOTOGRAPHER
+// ----------------------------------------------------
+
+/**
+ * Escapes HTML characters in user-provided content to prevent XSS / formatting corruption.
+ */
+function escapeHtml(str: unknown): string {
+  if (str === null || str === undefined) return '';
+  return String(str)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#039;');
+}
+
+/**
+ * Reusable helper to send transactional emails via Resend HTTP API.
+ * Uses native fetch, respecting RESEND_API_KEY, RESEND_FROM_EMAIL, and ADMIN_EMAIL.
+ * If credentials are missing, silently ignores without throwing.
+ */
+async function sendNotificationEmail(options: { subject: string; html: string }): Promise<boolean> {
+  const apiKey = (process.env.RESEND_API_KEY || '').trim();
+  const toEmail = (process.env.ADMIN_EMAIL || '').trim();
+
+  // Se RESEND_API_KEY ou ADMIN_EMAIL não estiverem configurados, a notificação simplesmente não é enviada
+  if (!apiKey || !toEmail) {
+    return false;
+  }
+
+  const fromEmail = (process.env.RESEND_FROM_EMAIL || '').trim() || 'onboarding@resend.dev';
+
+  try {
+    const res = await fetch('https://api.resend.com/emails', {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${apiKey}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        from: fromEmail,
+        to: [toEmail],
+        subject: options.subject,
+        html: options.html,
+      }),
+    });
+
+    if (!res.ok) {
+      const errText = await res.text().catch(() => '');
+      console.warn(`[Resend] Falha ao enviar e-mail (${res.status}): ${errText}`);
+      return false;
+    }
+
+    const data = await res.json().catch(() => ({}));
+    console.log('[Resend] E-mail de notificação enviado com sucesso:', data?.id || 'ok');
+    return true;
+  } catch (error) {
+    console.warn('[Resend] Erro inesperado ao tentar enviar e-mail de notificação:', error);
+    return false;
+  }
+}
+
+/**
+ * 1. E-mail de notificação quando um cliente seleciona fotos na página pública de Modelos (mostruário geral)
+ */
+async function sendModelosSelectionEmail(data: {
+  clientName: string;
+  whatsapp: string;
+  email?: string;
+  selectedCount: number;
+  notes?: string;
+  selectedPhotoNames?: string[];
+}): Promise<boolean> {
+  const cleanPhone = (data.whatsapp || '').replace(/\D/g, '');
+  const waLink = cleanPhone ? `https://wa.me/${cleanPhone}` : '';
+
+  const photosListHtml = (data.selectedPhotoNames && data.selectedPhotoNames.length > 0)
+    ? `
+      <div style="margin-top: 16px; padding: 14px; background-color: #f8fafc; border: 1px solid #e2e8f0; border-radius: 8px;">
+        <p style="margin: 0 0 10px 0; font-size: 13px; font-weight: 700; color: #334155; text-transform: uppercase; letter-spacing: 0.5px;">Fotos Escolhidas no Mostruário:</p>
+        <ul style="margin: 0; padding-left: 20px; font-size: 13px; color: #475569; line-height: 1.6;">
+          ${data.selectedPhotoNames.map((name) => `<li style="margin-bottom: 4px;">${escapeHtml(name)}</li>`).join('')}
+        </ul>
+      </div>
+    `
+    : '';
+
+  const html = `
+    <!DOCTYPE html>
+    <html lang="pt-BR">
+    <head><meta charset="utf-8" /></head>
+    <body style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; background-color: #f1f5f9; margin: 0; padding: 24px; color: #1e293b;">
+      <div style="max-width: 600px; margin: 0 auto; background-color: #ffffff; border-radius: 14px; overflow: hidden; box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.05), 0 2px 4px -2px rgba(0, 0, 0, 0.05); border: 1px solid #e2e8f0;">
+        <div style="background: linear-gradient(135deg, #1e293b, #0f172a); padding: 24px; color: #ffffff;">
+          <span style="display: inline-block; background-color: #f59e0b; color: #000000; font-size: 11px; font-weight: 800; text-transform: uppercase; letter-spacing: 0.5px; padding: 3px 8px; border-radius: 6px; margin-bottom: 8px;">Novo Lead / Mostruário</span>
+          <h2 style="margin: 0; font-size: 20px; font-weight: 700; color: #ffffff;">Seleção na Página de Modelos</h2>
+          <p style="margin: 6px 0 0 0; font-size: 13px; color: #94a3b8;">Um cliente realizou uma seleção de fotos através da galeria de mostruário.</p>
+        </div>
+        <div style="padding: 24px;">
+          <table style="width: 100%; border-collapse: collapse; font-size: 14px;">
+            <tr>
+              <td style="padding: 10px 0; color: #64748b; font-weight: 600; width: 150px; border-bottom: 1px solid #f1f5f9;">Nome do Cliente:</td>
+              <td style="padding: 10px 0; color: #0f172a; font-weight: 700; border-bottom: 1px solid #f1f5f9;">${escapeHtml(data.clientName)}</td>
+            </tr>
+            <tr>
+              <td style="padding: 10px 0; color: #64748b; font-weight: 600; border-bottom: 1px solid #f1f5f9;">WhatsApp:</td>
+              <td style="padding: 10px 0; color: #0f172a; border-bottom: 1px solid #f1f5f9;">
+                <strong>${escapeHtml(data.whatsapp)}</strong>
+                ${waLink ? `<a href="${waLink}" style="margin-left: 8px; font-size: 12px; color: #2563eb; text-decoration: none; font-weight: 600;">(Abrir no WhatsApp ↗)</a>` : ''}
+              </td>
+            </tr>
+            <tr>
+              <td style="padding: 10px 0; color: #64748b; font-weight: 600; border-bottom: 1px solid #f1f5f9;">E-mail:</td>
+              <td style="padding: 10px 0; color: #0f172a; border-bottom: 1px solid #f1f5f9;">${data.email ? escapeHtml(data.email) : '<span style="color: #94a3b8; font-style: italic;">Não informado</span>'}</td>
+            </tr>
+            <tr>
+              <td style="padding: 10px 0; color: #64748b; font-weight: 600; border-bottom: 1px solid #f1f5f9;">Qtd. de Fotos:</td>
+              <td style="padding: 10px 0; color: #0f172a; border-bottom: 1px solid #f1f5f9;">
+                <span style="display: inline-block; background-color: #fef3c7; color: #92400e; font-weight: 700; padding: 2px 8px; border-radius: 6px; font-size: 13px;">${data.selectedCount} foto(s)</span>
+              </td>
+            </tr>
+            <tr>
+              <td style="padding: 10px 0; color: #64748b; font-weight: 600; vertical-align: top;">Observações:</td>
+              <td style="padding: 10px 0; color: #334155; line-height: 1.5;">${data.notes ? escapeHtml(data.notes) : '<span style="color: #94a3b8; font-style: italic;">Nenhuma observação informada</span>'}</td>
+            </tr>
+          </table>
+
+          ${photosListHtml}
+
+          <div style="margin-top: 24px; padding-top: 16px; border-top: 1px solid #e2e8f0; font-size: 12px; color: #94a3b8; text-align: center;">
+            Enviado automaticamente pelo seu Sistema de Gestão de Ensaios Fotográficos.
+          </div>
+        </div>
+      </div>
+    </body>
+    </html>
+  `;
+
+  return sendNotificationEmail({
+    subject: `🔔 [Novo Lead] Fotos Selecionadas na Página de Modelos - ${data.clientName}`,
+    html,
+  });
+}
+
+/**
+ * 2. E-mail de notificação quando o cliente conclui a seleção individual
+ */
+async function sendIndividualSelectionEmail(data: {
+  clientName: string;
+  whatsapp: string;
+  contractedSession: string;
+  chosenPhotoNames: string[];
+}): Promise<boolean> {
+  const cleanPhone = (data.whatsapp || '').replace(/\D/g, '');
+  const waLink = cleanPhone ? `https://wa.me/${cleanPhone}` : '';
+
+  const photosListHtml = (data.chosenPhotoNames && data.chosenPhotoNames.length > 0)
+    ? `
+      <div style="margin-top: 16px; padding: 14px; background-color: #f8fafc; border: 1px solid #e2e8f0; border-radius: 8px;">
+        <p style="margin: 0 0 10px 0; font-size: 13px; font-weight: 700; color: #334155; text-transform: uppercase; letter-spacing: 0.5px;">Lista das Fotos Escolhidas (${data.chosenPhotoNames.length}):</p>
+        <ol style="margin: 0; padding-left: 20px; font-size: 13px; color: #475569; line-height: 1.6;">
+          ${data.chosenPhotoNames.map((name) => `<li style="margin-bottom: 4px;"><strong>${escapeHtml(name)}</strong></li>`).join('')}
+        </ol>
+      </div>
+    `
+    : `
+      <div style="margin-top: 16px; padding: 12px; background-color: #f8fafc; border: 1px solid #e2e8f0; border-radius: 8px; font-size: 13px; color: #64748b;">
+        Nenhuma foto foi listada.
+      </div>
+    `;
+
+  const html = `
+    <!DOCTYPE html>
+    <html lang="pt-BR">
+    <head><meta charset="utf-8" /></head>
+    <body style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; background-color: #f1f5f9; margin: 0; padding: 24px; color: #1e293b;">
+      <div style="max-width: 600px; margin: 0 auto; background-color: #ffffff; border-radius: 14px; overflow: hidden; box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.05), 0 2px 4px -2px rgba(0, 0, 0, 0.05); border: 1px solid #e2e8f0;">
+        <div style="background: linear-gradient(135deg, #1e293b, #0f172a); padding: 24px; color: #ffffff;">
+          <span style="display: inline-block; background-color: #10b981; color: #ffffff; font-size: 11px; font-weight: 800; text-transform: uppercase; letter-spacing: 0.5px; padding: 3px 8px; border-radius: 6px; margin-bottom: 8px;">Seleção Concluída</span>
+          <h2 style="margin: 0; font-size: 20px; font-weight: 700; color: #ffffff;">Seleção Individual de Fotos</h2>
+          <p style="margin: 6px 0 0 0; font-size: 13px; color: #94a3b8;">O cliente finalizou a escolha das fotos para produção.</p>
+        </div>
+        <div style="padding: 24px;">
+          <table style="width: 100%; border-collapse: collapse; font-size: 14px;">
+            <tr>
+              <td style="padding: 10px 0; color: #64748b; font-weight: 600; width: 160px; border-bottom: 1px solid #f1f5f9;">Nome do Cliente:</td>
+              <td style="padding: 10px 0; color: #0f172a; font-weight: 700; border-bottom: 1px solid #f1f5f9;">${escapeHtml(data.clientName)}</td>
+            </tr>
+            <tr>
+              <td style="padding: 10px 0; color: #64748b; font-weight: 600; border-bottom: 1px solid #f1f5f9;">WhatsApp:</td>
+              <td style="padding: 10px 0; color: #0f172a; border-bottom: 1px solid #f1f5f9;">
+                <strong>${escapeHtml(data.whatsapp)}</strong>
+                ${waLink ? `<a href="${waLink}" style="margin-left: 8px; font-size: 12px; color: #2563eb; text-decoration: none; font-weight: 600;">(Abrir no WhatsApp ↗)</a>` : ''}
+              </td>
+            </tr>
+            <tr>
+              <td style="padding: 10px 0; color: #64748b; font-weight: 600; border-bottom: 1px solid #f1f5f9;">Ensaio Contratado:</td>
+              <td style="padding: 10px 0; color: #0f172a; font-weight: 600; border-bottom: 1px solid #f1f5f9;">${escapeHtml(data.contractedSession)}</td>
+            </tr>
+            <tr>
+              <td style="padding: 10px 0; color: #64748b; font-weight: 600;">Total de Fotos:</td>
+              <td style="padding: 10px 0; color: #0f172a;">
+                <span style="display: inline-block; background-color: #dbeafe; color: #1e40af; font-weight: 700; padding: 2px 8px; border-radius: 6px; font-size: 13px;">${data.chosenPhotoNames.length} foto(s) escolhida(s)</span>
+              </td>
+            </tr>
+          </table>
+
+          ${photosListHtml}
+
+          <div style="margin-top: 24px; padding-top: 16px; border-top: 1px solid #e2e8f0; font-size: 12px; color: #94a3b8; text-align: center;">
+            Enviado automaticamente pelo seu Sistema de Gestão de Ensaios Fotográficos.
+          </div>
+        </div>
+      </div>
+    </body>
+    </html>
+  `;
+
+  return sendNotificationEmail({
+    subject: `📸 [Seleção Concluída] Fotos Escolhidas por ${data.clientName}`,
+    html,
+  });
+}
+
+/**
+ * 3. E-mail de notificação quando o cliente aprova ou solicita ajustes nas fotos com marca d'água
+ */
+async function sendWatermarkReviewEmail(data: {
+  clientName: string;
+  whatsapp: string;
+  proofStatus: 'Aprovado' | 'Ajustes solicitados';
+  watermarkedPhotos: Array<{
+    name?: string;
+    approved?: boolean;
+    clientFeedback?: string;
+  }>;
+}): Promise<boolean> {
+  const isApproved = data.proofStatus === 'Aprovado';
+  const cleanPhone = (data.whatsapp || '').replace(/\D/g, '');
+  const waLink = cleanPhone ? `https://wa.me/${cleanPhone}` : '';
+
+  const photosWithComments = (data.watermarkedPhotos || []).filter(
+    (p) => (p.clientFeedback || '').trim().length > 0
+  );
+
+  let feedbackSectionHtml = '';
+  if (photosWithComments.length > 0) {
+    feedbackSectionHtml = `
+      <div style="margin-top: 18px; padding: 14px; background-color: #fffbeb; border: 1px solid #fde68a; border-radius: 8px;">
+        <p style="margin: 0 0 12px 0; font-size: 13px; font-weight: 700; color: #92400e; text-transform: uppercase; letter-spacing: 0.5px;">Comentários e Ajustes por Foto (${photosWithComments.length}):</p>
+        ${photosWithComments
+          .map(
+            (p, idx) => `
+            <div style="margin-bottom: 12px; padding-bottom: 10px; border-bottom: 1px solid #fef3c7;">
+              <div style="font-size: 13px; font-weight: 700; color: #78350f; margin-bottom: 3px;">
+                ${idx + 1}. ${escapeHtml(p.name || `Foto ${idx + 1}`)}
+                <span style="font-size: 11px; font-weight: 600; padding: 2px 6px; border-radius: 4px; margin-left: 6px; background-color: ${p.approved ? '#dcfce7; color: #166534;' : '#fee2e2; color: #991b1b;'}">
+                  ${p.approved ? 'Aprovada c/ observação' : 'Ajuste solicitado'}
+                </span>
+              </div>
+              <div style="font-size: 13px; color: #451a03; background-color: #ffffff; padding: 8px 10px; border-radius: 6px; border: 1px solid #fde68a; line-height: 1.5;">
+                "${escapeHtml(p.clientFeedback)}"
+              </div>
+            </div>
+          `
+          )
+          .join('')}
+      </div>
+    `;
+  } else if (!isApproved) {
+    feedbackSectionHtml = `
+      <div style="margin-top: 16px; padding: 12px; background-color: #fff7ed; border: 1px solid #fed7aa; border-radius: 8px; font-size: 13px; color: #9a3412;">
+        O cliente marcou ajustes solicitados sem comentários específicos em texto.
+      </div>
+    `;
+  } else {
+    feedbackSectionHtml = `
+      <div style="margin-top: 16px; padding: 12px; background-color: #f0fdf4; border: 1px solid #bbf7d0; border-radius: 8px; font-size: 13px; color: #166534;">
+        ✓ Todas as fotos foram aprovadas diretamente pelo cliente sem solicitações de alterações.
+      </div>
+    `;
+  }
+
+  const html = `
+    <!DOCTYPE html>
+    <html lang="pt-BR">
+    <head><meta charset="utf-8" /></head>
+    <body style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; background-color: #f1f5f9; margin: 0; padding: 24px; color: #1e293b;">
+      <div style="max-width: 600px; margin: 0 auto; background-color: #ffffff; border-radius: 14px; overflow: hidden; box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.05), 0 2px 4px -2px rgba(0, 0, 0, 0.05); border: 1px solid #e2e8f0;">
+        <div style="background: linear-gradient(135deg, ${isApproved ? '#14532d, #052e16' : '#7c2d12, #431407'}); padding: 24px; color: #ffffff;">
+          <span style="display: inline-block; background-color: ${isApproved ? '#22c55e' : '#f97316'}; color: #ffffff; font-size: 11px; font-weight: 800; text-transform: uppercase; letter-spacing: 0.5px; padding: 3px 8px; border-radius: 6px; margin-bottom: 8px;">Revisão de Fotos</span>
+          <h2 style="margin: 0; font-size: 20px; font-weight: 700; color: #ffffff;">${isApproved ? 'Fotos com Marca d\'Água Aprovadas' : 'Ajustes Solicitados pelo Cliente'}</h2>
+          <p style="margin: 6px 0 0 0; font-size: 13px; color: #cbd5e1;">${isApproved ? 'O cliente aprovou as fotos com marca d\'água.' : 'O cliente revisou a galeria com marca d\'água e solicitou ajustes.'}</p>
+        </div>
+        <div style="padding: 24px;">
+          <table style="width: 100%; border-collapse: collapse; font-size: 14px;">
+            <tr>
+              <td style="padding: 10px 0; color: #64748b; font-weight: 600; width: 160px; border-bottom: 1px solid #f1f5f9;">Nome do Cliente:</td>
+              <td style="padding: 10px 0; color: #0f172a; font-weight: 700; border-bottom: 1px solid #f1f5f9;">${escapeHtml(data.clientName)}</td>
+            </tr>
+            <tr>
+              <td style="padding: 10px 0; color: #64748b; font-weight: 600; border-bottom: 1px solid #f1f5f9;">WhatsApp:</td>
+              <td style="padding: 10px 0; color: #0f172a; border-bottom: 1px solid #f1f5f9;">
+                <strong>${escapeHtml(data.whatsapp)}</strong>
+                ${waLink ? `<a href="${waLink}" style="margin-left: 8px; font-size: 12px; color: #2563eb; text-decoration: none; font-weight: 600;">(Abrir no WhatsApp ↗)</a>` : ''}
+              </td>
+            </tr>
+            <tr>
+              <td style="padding: 10px 0; color: #64748b; font-weight: 600;">Status da Aprovação:</td>
+              <td style="padding: 10px 0; color: #0f172a;">
+                <span style="display: inline-block; background-color: ${isApproved ? '#dcfce7; color: #15803d;' : '#ffedd5; color: #c2410c;'} font-weight: 800; padding: 4px 10px; border-radius: 6px; font-size: 13px;">
+                  ${isApproved ? '✓ Aprovado' : '⚠ Ajustes solicitados'}
+                </span>
+              </td>
+            </tr>
+          </table>
+
+          ${feedbackSectionHtml}
+
+          <div style="margin-top: 24px; padding-top: 16px; border-top: 1px solid #e2e8f0; font-size: 12px; color: #94a3b8; text-align: center;">
+            Enviado automaticamente pelo seu Sistema de Gestão de Ensaios Fotográficos.
+          </div>
+        </div>
+      </div>
+    </body>
+    </html>
+  `;
+
+  const subjectPrefix = isApproved ? '✅ [Aprovado]' : '⚠️ [Ajustes Solicitados]';
+  return sendNotificationEmail({
+    subject: `${subjectPrefix} Revisão de Marca d'Água - ${data.clientName}`,
+    html,
+  });
+}
+
+// ----------------------------------------------------
 // DATA SYNC & CRUD ENDPOINTS
 // ----------------------------------------------------
 
@@ -528,6 +864,24 @@ app.post('/api/public/selection/:token', async (req, res) => {
   memoryStore.clients[index] = updatedClient;
   await persistDb();
 
+  // Disparo assíncrono de notificação por e-mail (Resend) - não bloqueia a resposta ao cliente
+  try {
+    const chosenIds: string[] = Array.isArray(chosenPhotoIds) ? chosenPhotoIds : updatedClient.chosenPhotoIds || [];
+    const chosenPhotoNames = chosenIds.map((id, idx) => {
+      const photo = memoryStore.modelPhotos.find((p) => p.id === id);
+      return photo?.name || `Foto ${idx + 1} (${id})`;
+    });
+
+    sendIndividualSelectionEmail({
+      clientName: updatedClient.name,
+      whatsapp: updatedClient.whatsapp,
+      contractedSession: updatedClient.contractedSession || 'Ensaio Contratado',
+      chosenPhotoNames,
+    }).catch((err) => console.warn('[Resend] Erro ao enviar e-mail de seleção individual:', err));
+  } catch (err) {
+    console.warn('[Resend] Erro ao preparar e-mail de seleção individual:', err);
+  }
+
   res.json({
     success: true,
     client: updatedClient,
@@ -585,6 +939,18 @@ app.post('/api/public/proof/:token', async (req, res) => {
 
   memoryStore.clients[index] = updatedClient;
   await persistDb();
+
+  // Disparo assíncrono de notificação por e-mail (Resend) - não bloqueia a resposta ao cliente
+  try {
+    sendWatermarkReviewEmail({
+      clientName: updatedClient.name,
+      whatsapp: updatedClient.whatsapp,
+      proofStatus,
+      watermarkedPhotos: validPhotos,
+    }).catch((err) => console.warn('[Resend] Erro ao enviar e-mail de fotos com marca d\'água:', err));
+  } catch (err) {
+    console.warn('[Resend] Erro ao preparar e-mail de fotos com marca d\'água:', err);
+  }
 
   res.json({
     success: true,
@@ -655,6 +1021,25 @@ app.post('/api/public/submit-modelos-lead', async (req, res) => {
 
   memoryStore.clients.unshift(newClient);
   await persistDb();
+
+  // Disparo assíncrono de notificação por e-mail (Resend) - não bloqueia a resposta ao cliente
+  try {
+    const selectedPhotoNames = validPhotoIds.map((id, idx) => {
+      const photo = memoryStore.modelPhotos.find((p) => p.id === id);
+      return photo?.name || `Foto ${idx + 1} (${id})`;
+    });
+
+    sendModelosSelectionEmail({
+      clientName: newClient.name,
+      whatsapp: newClient.whatsapp,
+      email: newClient.email,
+      selectedCount: validPhotoIds.length,
+      notes: notes ? notes.trim() : '',
+      selectedPhotoNames,
+    }).catch((err) => console.warn('[Resend] Erro ao enviar e-mail da galeria de modelos:', err));
+  } catch (err) {
+    console.warn('[Resend] Erro ao preparar e-mail da galeria de modelos:', err);
+  }
 
   res.json({
     success: true,
